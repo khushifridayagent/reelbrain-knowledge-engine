@@ -2,7 +2,7 @@
 
 Evidence-first personal Instagram Reel → searchable knowledge pipeline, designed for isolation and auditable source links.
 
-**State (24 November 2026):** Phase 9 autonomous **DM intake and queue coordination deployed** on isolated Supabase; one real direct `ig_reel` received and persisted. Approved sender list: `rudrzy`, `rudra_625003`, `hritiksingh_8`. Postgres cron rechecks queue every five minutes, and official Graph reconciliation checks each sender roughly every 15 minutes. Public Reel caption/metadata and distinct official-topic research can be stored in `reelbrain_reel_knowledge`. **Actual full-video OCR/ASR/VLM worker is implemented in Python but NOT hosted or verified on real media.** Website is NOT hosted. The repository is PUBLIC and contains code and synthetic tests only, no secrets or private media.
+**State (24 November 2026):** Phase 9 autonomous **DM intake and queue coordination deployed** on isolated Supabase; one real direct `ig_reel` received and persisted. Exactly three owner-approved sender IDs are stored only in the private Supabase allowlist. Postgres cron rechecks queue every five minutes, and official Graph reconciliation checks each sender roughly every 15 minutes. Public Reel caption/metadata and distinct official-topic research can be stored in `reelbrain_reel_knowledge`. **Actual full-video OCR/ASR/VLM worker is implemented in Python but NOT hosted or verified on real media.** Website is NOT hosted. The repository is PUBLIC and contains code and synthetic tests only, no secrets or private media.
 
 ### Architecture
 
