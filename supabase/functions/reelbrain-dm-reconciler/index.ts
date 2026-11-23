@@ -43,12 +43,11 @@ Deno.serve(async req=>{
  if(!authorized)return json({error:'unauthorized_or_expired'},403);
  if(!token || !/^[0-9]{3,32}$/.test(professional))return json({error:'meta_connection_not_configured'},503);
  let examined=0,recorded=0,newReceipts=0,linkedReels=0,errors=0;
- const allowedNames=new Set(['rudrzy','rudra_625003','hritiksingh_8']);
  let senders:any[];
  try{senders=await db('reelbrain_sender_candidates?select=sender_id,username&approved=eq.true&limit=10');}
  catch{return json({error:'allowlist_unavailable'},503)}
  if(!Array.isArray(senders))return json({error:'invalid_allowlist'},503);
- const filtered=senders.filter(x=>allowedNames.has(x.username) && (selectedName==null || x.username===selectedName));
+ const filtered=senders.filter(x=>typeof selectedName==='string' && typeof x?.username==='string' && x.username===selectedName);
  if(filtered.length!==1)return json({error:'one_sender_target_required'},400);
  for(const user of filtered){
    const sender=String(user.sender_id||'');if(!/^[0-9]{3,32}$/.test(sender)||sender===professional)continue;
