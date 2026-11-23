@@ -84,7 +84,18 @@ def acquire_public_reel(url: str, output_directory: str | Path, *, max_bytes: in
     if result.returncode:
         # yt-dlp stderr can contain private URLs/credentials in other contexts.
         # Do not persist or reveal its raw untrusted provider error.
-        raise PublicMediaError('Public Reel download unavailable (yt-dlp failed)')
+        diagnostic = str(getattr(result,'stderr','') or '').lower()[:12000]
+        if any(x in diagnostic for x in ('http error 429', '429 too many requests', 'rate limit', 'too many requests')):
+            reason = 'rate_limited'
+        elif any(x in diagnostic for x in ('http error 403', '403 forbidden', 'access denied')):
+            reason = 'http_forbidden'
+        elif any(x in diagnostic for x in ('login required', 'log in', 'login to', 'sign in', 'cookies')):
+            reason = 'login_required'
+        elif any(x in diagnostic for x in ('unable to extract', 'unsupported url', 'no video formats', 'requested format is not available')):
+            reason = 'extractor_unavailable'
+        else:
+            reason = 'unknown'
+        raise PublicMediaError('Public Reel download unavailable: ' + reason)
     if not _valid_media(target, max_bytes):
         raise PublicMediaError('No valid bounded MP4 returned by public Reel extractor')
     return target
