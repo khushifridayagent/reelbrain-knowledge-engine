@@ -19,21 +19,29 @@ from .providers import GroqSpeechToText, GeminiVideoResearcher,ProviderOptions
 
 def flag(k:str)->bool:return os.getenv(k,'').lower() in ('true','yes','1')
 def checked_config()->dict:
+    """Fail closed before claiming any queued job, with no surprise paid calls."""
     missing=[]
-    for k in ('REELBRAIN_DB_URL','APIFY_API_TOKEN'):
-        if not os.getenv(k):missing.append(k)
-    for k in ('REELBRAIN_PAID_PROVIDER_APPROVED','REELBRAIN_SOURCE_RIGHTS_CONFIRMED'):
-        if not flag(k):missing.append(k)
+    if not os.getenv('REELBRAIN_DB_URL'):missing.append('REELBRAIN_DB_URL')
+    if not flag('REELBRAIN_SOURCE_RIGHTS_CONFIRMED'):missing.append('REELBRAIN_SOURCE_RIGHTS_CONFIRMED')
+    mode=os.getenv('REELBRAIN_MEDIA_ACQUISITION','apify').lower().strip()
+    if mode=='apify':
+        if not os.getenv('APIFY_API_TOKEN'):missing.append('APIFY_API_TOKEN')
+        if not flag('REELBRAIN_PAID_PROVIDER_APPROVED'):missing.append('REELBRAIN_PAID_PROVIDER_APPROVED')
+    elif mode=='yt_dlp_public':
+        if not flag('REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD'):missing.append('REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD')
+    else:missing.append('REELBRAIN_MEDIA_ACQUISITION (must be apify or yt_dlp_public)')
     if missing:raise RuntimeError('Worker will not claim jobs before configured: '+', '.join(missing))
-    return {'db_url':os.environ['REELBRAIN_DB_URL'],'apify_token':os.environ['APIFY_API_TOKEN']}
+    return {'db_url':os.environ['REELBRAIN_DB_URL'],
+            'apify_token':os.getenv('APIFY_API_TOKEN',''), 'acquisition':mode}
 
 def pg_open(db_url:str):
     try:import psycopg
     except ImportError as e:raise RuntimeError('Install psycopg[binary] in worker environment') from e
     return psycopg.connect(db_url,connect_timeout=6)
 
-def process_url(source_url:str,pg,*,apify_token:str)->dict:
+def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->dict:
     from tempfile import TemporaryDirectory
+    from .public_media import acquire_public_reel
     with TemporaryDirectory(prefix='rb_reel_worker_') as d:
         db=KnowledgeStore(Path(d)/'isolated_evidence.sqlite')
         try:
@@ -45,8 +53,18 @@ def process_url(source_url:str,pg,*,apify_token:str)->dict:
                     if os.getenv('GEMINI_API_KEY'):
                         vlm=GeminiVideoResearcher(os.environ['GEMINI_API_KEY'],os.getenv('GEMINI_VIDEO_MODEL',''))
                 return LocalPipelineEngine(store,audio_model=asr,video_model=vlm)
-            result=process_instagram_link(db,source_url,options=LinkProcessingOptions(allow_paid=True,allow_external=True,rights_confirmed=True),
-                              apify_client=ApifyReelClient(apify_token),downloader=SafeMediaDownloader(),engine_factory=engine_factory)
+            if acquisition=='yt_dlp_public':
+                # No cookie/login bypass; official source URL only; real bounded MP4 required.
+                media=acquire_public_reel(source_url,Path(d))
+                result=engine_factory(db).ingest(media,source_url,allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
+                result={**result,'media_processed':bool(result.get('processing_receipt_id')),
+                        'provider':'yt-dlp-public','media_deleted_after_processing':True}
+            elif acquisition=='apify':
+                result=process_instagram_link(db,source_url,
+                    options=LinkProcessingOptions(allow_paid=True,allow_external=True,rights_confirmed=True),
+                    apify_client=ApifyReelClient(apify_token),
+                    downloader=SafeMediaDownloader(),engine_factory=engine_factory)
+            else:raise RuntimeError('Unsupported media acquisition mode')
             if not result.get('media_processed'):
                 raise RuntimeError('provider returned no locally processed media; refusing success status')
             return save_reel_to_postgres(db,pg,source_url,result)
@@ -63,7 +81,7 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
         done=[]
         for job_id,url,token in claimed:
             try:
-                r=processor(url,pg) if processor else process_url(url,pg,apify_token=config['apify_token'])
+                r=processor(url,pg) if processor else process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'))
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
                 with pg.cursor() as cur:
                     cur.execute('select public.reelbrain_finish_dm_job(%s,%s,%s,%s::jsonb)',
