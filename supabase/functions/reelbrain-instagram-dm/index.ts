@@ -49,15 +49,19 @@ async function verifiedHmac(raw:Uint8Array,signature:string,secret:string):Promi
 }
 function configured():boolean{return ["META_APP_SECRET","META_VERIFY_TOKEN","META_IG_PROFESSIONAL_ID","META_ALLOWED_SENDERS","SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY"].every(k=>!!env(k));}
 Deno.serve(async(req:Request)=>{
-  if(!configured())return respond({error:"Webhook credentials not configured"},503);
+  // Meta GET verification needs its verify token, not media-processing or POST credentials.
   const target=new URL(req.url);
   if(req.method==="GET"){
-    if(target.searchParams.get("hub.mode")!=="subscribe" || !equal(target.searchParams.get("hub.verify_token")||"",env("META_VERIFY_TOKEN")))return respond({error:"Forbidden"},403);
+    const verifyToken=env("META_VERIFY_TOKEN");
+    if(!verifyToken)return respond({error:"META_VERIFY_TOKEN not configured"},503);
+    if(target.searchParams.get("hub.mode")!=="subscribe" || !equal(target.searchParams.get("hub.verify_token")||"",verifyToken))return respond({error:"Forbidden"},403);
     const challenge=target.searchParams.get("hub.challenge")||"";
     if(!/^\d{1,100}$/.test(challenge))return respond({error:"Invalid challenge"},400);
     return new Response(challenge,{headers:{"content-type":"text/plain","cache-control":"no-store"}});
   }
   if(req.method!=="POST")return respond({error:"Method not allowed"},405);
+  // Real POST delivery must still provide all credentials and HMAC validation.
+  if(!configured())return respond({error:"Webhook credentials not configured"},503);
   const len=Number(req.headers.get("content-length")||"0");
   if(len>MAX_BYTES)return respond({error:"Payload too large"},413);
   const raw=new Uint8Array(await req.arrayBuffer());
