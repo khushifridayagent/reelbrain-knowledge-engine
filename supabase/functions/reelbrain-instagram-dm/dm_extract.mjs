@@ -50,7 +50,8 @@ export function collectApprovedEvents(payload,allowed,receiver){
   for(const item of payload.entry){
     if(!item || typeof item!=='object')continue;
     if(!Array.isArray(item.messaging)){
-      // Non-messaging subscription events are not DM messages.
+      // If Meta changes the messaging envelope shape, never ACK and discard it.
+      if(Array.isArray(item.changes) && item.changes.some(x=>x?.field==='messages'))throw new Error('unhandled_message_envelope');
       continue;
     }
     if(item.messaging.length>100)throw new Error('too_many_events');
@@ -58,8 +59,13 @@ export function collectApprovedEvents(payload,allowed,receiver){
       if(++total>100)throw new Error('too_many_events');
       if(!event || typeof event!=='object' || event.thread || event.participants)continue;
       const sender=event.sender?.id,recipient=event.recipient?.id, msg=event.message;
-      if(typeof sender!=='string' || !allowed.has(sender) || recipient!==receiver || !msg || typeof msg!=='object')continue;
-      if(typeof msg.mid!=='string' || !msg.mid || msg.mid.length>256 || msg.is_echo || msg.is_deleted)continue;
+      if(typeof sender!=='string' || !allowed.has(sender))continue;
+      if(recipient!==receiver)throw new Error('approved_sender_unexpected_recipient');
+      // Skip delivery/read metadata, not incoming messages.
+      if(!msg || typeof msg!=='object')continue;
+      if(msg.is_echo || msg.is_deleted)continue;
+      if(typeof msg.mid!=='string' || !msg.mid || msg.mid.length>256)throw new Error('approved_message_missing_id');
+      if(Array.isArray(msg.attachments) && msg.attachments.length>20)throw new Error('too_many_attachments');
       const urls=extractLinks(msg);
       const kinds=Array.isArray(msg.attachments)?msg.attachments.slice(0,20).map(a=>String(a?.type||'unknown').slice(0,50)):[];
       const suspected=kinds.length>0 || !!msg.share || !!msg.reel || (typeof msg.text==='string' && /(?:reel|instagram|http|www\.)/i.test(msg.text));
