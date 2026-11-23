@@ -47,7 +47,7 @@ async function verifiedHmac(raw:Uint8Array,signature:string,secret:string):Promi
   const v=[...new Uint8Array(await crypto.subtle.sign("HMAC",k,raw))].map(n=>n.toString(16).padStart(2,"0")).join("");
   return equal("sha256="+v,signature.toLowerCase());
 }
-function configured():boolean{return ["META_APP_SECRET","META_VERIFY_TOKEN","META_IG_PROFESSIONAL_ID","META_ALLOWED_SENDERS","SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY"].every(k=>!!env(k));}
+function configured():boolean{return ["META_APP_SECRET","META_VERIFY_TOKEN","META_IG_PROFESSIONAL_ID","SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY"].every(k=>!!env(k));}
 Deno.serve(async(req:Request)=>{
   // Meta GET verification needs its verify token, not media-processing or POST credentials.
   const target=new URL(req.url);
@@ -70,7 +70,15 @@ Deno.serve(async(req:Request)=>{
   let event:Json;
   try{event=JSON.parse(new TextDecoder().decode(raw));}catch{return respond({error:"Invalid JSON"},400);}
   if(event.object!=="instagram" || !Array.isArray(event.entry))return respond({accepted:true,queued:0,ignored:true});
-  const allowed=new Set(env("META_ALLOWED_SENDERS").split(/[,;\s]+/).map(x=>x.trim()).filter(Boolean));
+  // Verify signed event BEFORE accessing private allowlist. No arbitrary sender can enroll itself.
+  const allowedResponse=await fetch(env("SUPABASE_URL").replace(/\/$/,"")+"/rest/v1/reelbrain_sender_candidates?select=sender_id,approved&approved=eq.true&limit=20", {
+    headers:{"apikey":env("SUPABASE_SERVICE_ROLE_KEY"),"authorization":"Bearer "+env("SUPABASE_SERVICE_ROLE_KEY")},
+    signal:AbortSignal.timeout(5000)
+  }).catch(()=>null);
+  if(!allowedResponse || !allowedResponse.ok)return respond({error:"Private sender allowlist unavailable",retryable:true},503);
+  const approvedRows=await allowedResponse.json().catch(()=>null);
+  if(!Array.isArray(approvedRows))return respond({error:"Invalid allowlist response",retryable:true},503);
+  const allowed=new Set<string>(approvedRows.filter((x:any)=>x?.approved===true && typeof x?.sender_id==="string" && /^[0-9]{3,32}$/.test(x.sender_id)).map((x:any)=>x.sender_id));
   const jobs=new Map<string,{source_url:string,inbound_event_id:string,sender_digest:string}>();
   for(const entry of event.entry.slice(0,40)){
     if(!entry || !Array.isArray(entry.messaging))continue;
