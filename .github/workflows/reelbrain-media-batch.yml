@@ -4,6 +4,11 @@ name: Reelbrain scheduled media batch (opt-in)
 # not a guarantee of continuous service or successful Instagram downloads.
 on:
   workflow_dispatch:
+  # Kick off one execution as soon as this workflow update reaches main.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reelbrain-media-batch.yml'
   schedule:
     - cron: '17,47 * * * *'
 
@@ -16,10 +21,12 @@ concurrency:
 
 jobs:
   process-one-reel:
-    # Public repo stays inert until the owner explicitly enables it.
-    if: ${{ vars.REELBRAIN_WORKER_ENABLED == '1' }}
+    # Repo variable is OPTIONAL: set it to 0 only to pause the worker.
+    # An absent variable no longer blocks processing after the secret exists.
+    if: ${{ vars.REELBRAIN_WORKER_ENABLED != '0' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Lower than the database lease (15 min) to avoid running after expiry.
+    timeout-minutes: 14
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
       REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED: '1'
@@ -30,36 +37,51 @@ jobs:
       REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED: '0'
       PYTHONUNBUFFERED: '1'
     steps:
+      - name: Detect dedicated DB secret without logging its value
+        id: secret_check
+        shell: bash
+        run: |
+          if [[ -n "${REELBRAIN_DB_URL:-}" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Reelbrain DB URL secret exists in this repository; processing will be attempted."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::REELBRAIN_DB_URL is missing from this repository's Actions secrets. Processing skipped."
+          fi
       - uses: actions/checkout@v4
+        if: ${{ steps.secret_check.outputs.ready == 'true' }}
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
+        if: ${{ steps.secret_check.outputs.ready == 'true' }}
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-worker.txt
-      - name: Require dedicated private database secret
-        shell: bash
-        run: |
-          if [[ -z "${REELBRAIN_DB_URL}" ]]; then
-            echo "::error::Set REELBRAIN_DB_URL as an Actions secret before enabling this job."
-            exit 1
-          fi
-          echo "::add-mask::${REELBRAIN_DB_URL}"
       - name: Install real media tooling
+        if: ${{ steps.secret_check.outputs.ready == 'true' }}
         shell: bash
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
-      - name: Preflight without claiming a Reel
+      - name: Validate database connection before claiming a Reel
+        if: ${{ steps.secret_check.outputs.ready == 'true' }}
         run: |
           python - <<'PY'
-          from reelbrain.durable_worker import checked_config
-          checked_config()
-          print('Dedicated worker preflight passed; private credentials not printed.')
+          from reelbrain.durable_worker import checked_config, pg_open
+          config = checked_config()
+          try:
+              with pg_open(config['db_url']) as con:
+                  with con.cursor() as cur:
+                      cur.execute('SELECT 1')
+                      assert cur.fetchone()[0] == 1
+          except Exception as exc:
+              raise SystemExit('Dedicated DB connection failed (' + type(exc).__name__ + '): check the full connection URI including password in the GitHub Actions secret.')
+          print('Dedicated worker DB connectivity verified; credentials not printed.')
           PY
       - name: Process at most one queued Reel and acknowledge outcome
+        if: ${{ steps.secret_check.outputs.ready == 'true' }}
         run: |
           python - <<'PY'
           from reelbrain.durable_worker import checked_config, run_one_batch
