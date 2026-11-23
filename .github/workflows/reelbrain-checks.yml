@@ -1,0 +1,27 @@
+name: Reelbrain isolated validation
+on:
+  pull_request:
+  push:
+    branches: [feat/instagram-dm-research-v08]
+permissions:
+  contents: read
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install local dependencies and media test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
+          python -m pip install -r requirements.txt
+      - name: Python tests (real network and model calls are not used)
+        run: python -m unittest discover -s tests -t .
+      - name: JS parser and coordinator tests
+        run: node --test tests/*.test.mjs
