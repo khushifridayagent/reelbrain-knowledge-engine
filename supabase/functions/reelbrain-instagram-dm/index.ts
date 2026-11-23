@@ -1,99 +1,77 @@
-/** Meta Instagram Professional 1:1 DM -> isolated durable queue.
- * Requires: META_APP_SECRET, META_VERIFY_TOKEN, META_IG_PROFESSIONAL_ID,
- * META_ALLOWED_SENDERS, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
- * Unconfigured deployments return 503, never accept arbitrary messages.
- * No media is fetched. No automatic DM reply. No group-chat support.
+/** Reelbrain v0.9 – Meta 1:1 DM signed receiver, durable per-message receipts.
+ * Scope: Only approved sender Instagram-scoped IDs; never group chats.
+ * 200 is emitted only after Postgres atomically saves every accepted message receipt.
+ * No media download, no chat replies, no secrets/PII in logs.
  */
-type Json = Record<string, unknown>;
-const env = (k: string) => Deno.env.get(k)?.trim() || "";
-const respond = (value: Json, status=200) => new Response(JSON.stringify(value),
-  {status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
-const E = new TextEncoder();
+import { collectApprovedEvents } from './dm_extract.mjs';
+const env=(name:string)=>Deno.env.get(name)?.trim()||'';
+const E=new TextEncoder();
+const json=(obj:unknown,status=200)=>new Response(JSON.stringify(obj), {status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
+const URL_BASE=()=>env('SUPABASE_URL').replace(/\/$/,'');
+const key=()=>env('SUPABASE_SERVICE_ROLE_KEY');
+const headers=()=>({'apikey':key(),'authorization':'Bearer '+key(),'content-type':'application/json'});
 const MAX_BYTES=256_000;
-const URL_PATTERN=/https?:\/\/[^\s<>"']+/g;
-function canonical(input: unknown): string | null {
-  if(typeof input!=="string" || input.length>2048)return null;
-  try {
-    const u=new URL(input.replace(/[.,;!\]\)}]+$/, ""));
-    if(u.protocol!=="https:" || !["instagram.com","www.instagram.com"].includes(u.hostname) || u.username || u.password || u.port)return null;
-    const pieces=u.pathname.split("/").filter(Boolean);
-    if(pieces.length<2 || !["reel","p","tv"].includes(pieces[0]) || !/^[a-zA-Z0-9_-]{4,160}$/.test(pieces[1]))return null;
-    return `https://www.instagram.com/${pieces[0]}/${pieces[1]}/`;
-  }catch {return null;}
+function equal(a:string,b:string):boolean {
+  const aa=E.encode(a),bb=E.encode(b);
+  let delta=aa.length^bb.length;
+  for(let i=0;i<Math.max(aa.length,bb.length);i++)delta|=(aa[i]||0)^(bb[i]||0);
+  return delta===0;
 }
-function findUrls(message: Json): string[] {
-  const texts: string[]=[];
-  if(typeof message.text==="string")texts.push(message.text.slice(0,10_000));
-  if(Array.isArray(message.attachments)) {
-    for(const a of message.attachments.slice(0,20)) {
-      if(!a || typeof a!=="object" || !["ig_reel","reel","ig_post","post","share"].includes(a.type))continue;
-      if(a.payload && typeof a.payload==="object")for(const name of ["url","permalink"])
-        if(typeof a.payload[name]==="string")texts.push(a.payload[name]);
-    }
-  }
-  const found=new Set<string>();
-  for(const text of texts)for(const matched of text.match(URL_PATTERN)||[]){const url=canonical(matched);if(url)found.add(url);}
-  return [...found].slice(0,12);
-}
-function equal(a: string,b: string): boolean {
-  const x=E.encode(a);const y=E.encode(b);let diff=x.length^y.length;
-  for(let i=0;i<Math.max(x.length,y.length);i++)diff|=(x[i]||0)^(y[i]||0);
-  return diff===0;
-}
-async function sha256hex(text:string):Promise<string>{return [...new Uint8Array(await crypto.subtle.digest("SHA-256",E.encode(text)))].map(n=>n.toString(16).padStart(2,"0")).join("");}
-async function verifiedHmac(raw:Uint8Array,signature:string,secret:string):Promise<boolean>{
+async function validSignature(body:Uint8Array,signature:string,appSecret:string):Promise<boolean>{
   if(!/^sha256=[0-9a-f]{64}$/i.test(signature))return false;
-  const k=await crypto.subtle.importKey("raw",E.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
-  const v=[...new Uint8Array(await crypto.subtle.sign("HMAC",k,raw))].map(n=>n.toString(16).padStart(2,"0")).join("");
-  return equal("sha256="+v,signature.toLowerCase());
+  const hkey=await crypto.subtle.importKey('raw',E.encode(appSecret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const actual=[...new Uint8Array(await crypto.subtle.sign('HMAC',hkey,body))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  return equal('sha256='+actual,signature.toLowerCase());
 }
-function configured():boolean{return ["META_APP_SECRET","META_VERIFY_TOKEN","META_IG_PROFESSIONAL_ID","SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY"].every(k=>!!env(k));}
-Deno.serve(async(req:Request)=>{
-  // Meta GET verification needs its verify token, not media-processing or POST credentials.
-  const target=new URL(req.url);
-  if(req.method==="GET"){
-    const verifyToken=env("META_VERIFY_TOKEN");
-    if(!verifyToken)return respond({error:"META_VERIFY_TOKEN not configured"},503);
-    if(target.searchParams.get("hub.mode")!=="subscribe" || !equal(target.searchParams.get("hub.verify_token")||"",verifyToken))return respond({error:"Forbidden"},403);
-    const challenge=target.searchParams.get("hub.challenge")||"";
-    if(!/^\d{1,100}$/.test(challenge))return respond({error:"Invalid challenge"},400);
-    return new Response(challenge,{headers:{"content-type":"text/plain","cache-control":"no-store"}});
+function configured():boolean {
+  return ['META_APP_SECRET','META_VERIFY_TOKEN','META_IG_PROFESSIONAL_ID','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY'].every(n=>!!env(n));
+}
+Deno.serve(async (request:Request)=>{
+  const url=new URL(request.url);
+  if(request.method==='GET'){
+    const expected=env('META_VERIFY_TOKEN');
+    if(!expected)return json({error:'verification_not_configured'},503);
+    if(url.searchParams.get('hub.mode')!=='subscribe'|| !equal(url.searchParams.get('hub.verify_token')||'',expected))return json({error:'forbidden'},403);
+    const challenge=url.searchParams.get('hub.challenge')||'';
+    if(!/^\d{1,100}$/.test(challenge))return json({error:'invalid_challenge'},400);
+    return new Response(challenge,{headers:{'content-type':'text/plain','cache-control':'no-store'}});
   }
-  if(req.method!=="POST")return respond({error:"Method not allowed"},405);
-  // Real POST delivery must still provide all credentials and HMAC validation.
-  if(!configured())return respond({error:"Webhook credentials not configured"},503);
-  const len=Number(req.headers.get("content-length")||"0");
-  if(len>MAX_BYTES)return respond({error:"Payload too large"},413);
-  const raw=new Uint8Array(await req.arrayBuffer());
-  if(raw.length>MAX_BYTES)return respond({error:"Payload too large"},413);
-  if(!await verifiedHmac(raw,req.headers.get("x-hub-signature-256")||"",env("META_APP_SECRET")))return respond({error:"Invalid signature"},403);
-  let event:Json;
-  try{event=JSON.parse(new TextDecoder().decode(raw));}catch{return respond({error:"Invalid JSON"},400);}
-  if(event.object!=="instagram" || !Array.isArray(event.entry))return respond({accepted:true,queued:0,ignored:true});
-  // Verify signed event BEFORE accessing private allowlist. No arbitrary sender can enroll itself.
-  const allowedResponse=await fetch(env("SUPABASE_URL").replace(/\/$/,"")+"/rest/v1/reelbrain_sender_candidates?select=sender_id,approved&approved=eq.true&limit=20", {
-    headers:{"apikey":env("SUPABASE_SERVICE_ROLE_KEY"),"authorization":"Bearer "+env("SUPABASE_SERVICE_ROLE_KEY")},
-    signal:AbortSignal.timeout(5000)
+  if(request.method!=='POST')return json({error:'method_not_allowed'},405);
+  if(!configured())return json({error:'meta_credentials_incomplete',retryable:true},503);
+  if(Number(request.headers.get('content-length')||0)>MAX_BYTES)return json({error:'payload_too_large',retryable:true},503);
+  let raw:Uint8Array;
+  try{raw=new Uint8Array(await request.arrayBuffer());}catch{return json({error:'body_read_failed',retryable:true},503);}
+  if(raw.length>MAX_BYTES)return json({error:'payload_too_large',retryable:true},503);
+  if(!await validSignature(raw,request.headers.get('x-hub-signature-256')||'',env('META_APP_SECRET')))return json({error:'invalid_signature'},403);
+  let parsed:any;
+  try{parsed=JSON.parse(new TextDecoder().decode(raw));}catch{return json({error:'invalid_json'},400);}
+  if(parsed?.object!=='instagram')return json({accepted:true,applicable:false});
+
+  // A signed event is NOT automatically an authorized user message.
+  // The private allowlist is loaded AFTER signature verification, on each request.
+  const allowRes=await fetch(URL_BASE()+'/rest/v1/reelbrain_sender_candidates?select=sender_id&approved=eq.true&limit=20',{
+    headers:headers(),signal:AbortSignal.timeout(6000)
   }).catch(()=>null);
-  if(!allowedResponse || !allowedResponse.ok)return respond({error:"Private sender allowlist unavailable",retryable:true},503);
-  const approvedRows=await allowedResponse.json().catch(()=>null);
-  if(!Array.isArray(approvedRows))return respond({error:"Invalid allowlist response",retryable:true},503);
-  const allowed=new Set<string>(approvedRows.filter((x:any)=>x?.approved===true && typeof x?.sender_id==="string" && /^[0-9]{3,32}$/.test(x.sender_id)).map((x:any)=>x.sender_id));
-  const jobs=new Map<string,{source_url:string,inbound_event_id:string,sender_digest:string}>();
-  for(const entry of event.entry.slice(0,40)){
-    if(!entry || !Array.isArray(entry.messaging))continue;
-    for(const item of entry.messaging.slice(0,100)){
-      if(!item || typeof item!=="object" || item.thread || item.participants)continue;
-      const sender=item.sender?.id; const recipient=item.recipient?.id;const msg=item.message;
-      if(typeof sender!=="string" || !allowed.has(sender) || recipient!==env("META_IG_PROFESSIONAL_ID") || !msg || typeof msg!=="object")continue;
-      if(typeof msg.mid!=="string" || msg.mid.length<1 || msg.mid.length>256 || msg.is_echo || msg.is_deleted)continue;
-      const hashedSender=await sha256hex(sender);const hashedMessage=await sha256hex(msg.mid);
-      for(const source_url of findUrls(msg))if(!jobs.has(source_url))jobs.set(source_url,{source_url,inbound_event_id:hashedMessage,sender_digest:hashedSender});
-    }
-  }
-  if(!jobs.size)return respond({accepted:true,queued:0});
-  const api=env("SUPABASE_URL").replace(/\/$/,"")+"/rest/v1/reelbrain_dm_jobs?on_conflict=source_url";
-  const res=await fetch(api,{method:"POST",headers:{"apikey":env("SUPABASE_SERVICE_ROLE_KEY"),"authorization":"Bearer "+env("SUPABASE_SERVICE_ROLE_KEY"),"content-type":"application/json","prefer":"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify([...jobs.values()]),signal:AbortSignal.timeout(6000)}).catch(()=>null);
-  if(!res || !res.ok)return respond({error:"Queue persistence temporarily unavailable",retryable:true},503);
-  return respond({accepted:true,queued_or_deduplicated:jobs.size,media_processed:false});
+  if(!allowRes?.ok){console.error('reelbrain_allowlist_unavailable');return json({error:'allowlist_unavailable',retryable:true},503);}
+  const rows=await allowRes.json().catch(()=>null);
+  if(!Array.isArray(rows))return json({error:'malformed_allowlist',retryable:true},503);
+  const allowed=new Set<string>(rows.filter(x=>typeof x?.sender_id==='string'&&/^[0-9]{3,32}$/.test(x.sender_id)).map(x=>x.sender_id));
+  if(!allowed.size)return json({error:'empty_allowlist',retryable:true},503);
+
+  let messages;
+  try{messages=collectApprovedEvents(parsed,allowed,env('META_IG_PROFESSIONAL_ID'));}
+  catch(e){console.error('reelbrain_unrecognized_or_oversized_signed_DM_payload',String((e as Error).message).slice(0,60));return json({error:'unparsed_signed_message',retryable:true},503);}
+  if(!messages.length)return json({accepted:true,authorized_messages:0,ignored:true});
+  // Atomic and idempotent write: every message gets a private receipt even if no URL.
+  // Source URLs, with a separate per-message association, are deduplicated in the queue.
+  const res=await fetch(URL_BASE()+'/rest/v1/rpc/reelbrain_accept_dm_batch',{
+    method:'POST',headers:headers(),body:JSON.stringify({_events:messages}),signal:AbortSignal.timeout(8000)
+  }).catch(()=>null);
+  if(!res?.ok){console.error('reelbrain_signed_message_persist_failed',res?.status||'network');return json({error:'receipt_persistence_failed',retryable:true},503);}
+  const result=await res.json().catch(()=>null);
+  if(!result || result.received_messages!==messages.length){console.error('reelbrain_receipt_count_mismatch');return json({error:'receipt_ack_mismatch',retryable:true},503);}
+  console.log('reelbrain_signed_dm_saved',JSON.stringify({messages:messages.length,newReceipts:result.new_receipts,unresolved:result.new_unresolved_receipts}));
+  return json({accepted:true,authorized_messages:messages.length,receipts_saved_or_deduplicated:result.received_messages,
+    new_receipts:result.new_receipts,unresolved:result.new_unresolved_receipts,
+    reel_links_seen:result.reel_links_seen,media_processed:false});
 });
