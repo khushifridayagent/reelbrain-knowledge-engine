@@ -18,9 +18,9 @@ class PublicBundleTests(unittest.TestCase):
                 self.assertIn('--range', argv)
                 self.assertTrue(argv[-1].startswith('https://www.instagram.com/p/'))
                 base = Path(argv[argv.index('-D') + 1])
-                (base / 'slide_1.jpg').write_bytes(b'\\xff\\xd8\\xff' + b'A' * 100)
-                (base / 'slide_2.png').write_bytes(b'\\x89PNG\\r\\n\\x1a\\n' + b'B' * 100)
-                (base / 'slide_10.webp').write_bytes(b'RIFF' + b'\\x00'*4 + b'WEBP' + b'C'*100)
+                (base / 'slide_1.jpg').write_bytes(b'\xff\xd8\xff' + b'A' * 100)
+                (base / 'slide_2.png').write_bytes(b'\x89PNG\r\n\x1a\n' + b'B' * 100)
+                (base / 'slide_10.webp').write_bytes(b'RIFF' + b'\x00'*4 + b'WEBP' + b'C'*100)
                 return subprocess.CompletedProcess(argv, 0, '', '')
             bundle = acquire_public_bundle('https://www.instagram.com/p/EXAMPLE1/?utm_source=x',
                                            Path(td), gallery_runner=fake_gallery)
@@ -34,7 +34,7 @@ class PublicBundleTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 1, '', 'ERROR: login required')
             def gallery(argv, **kw):
                 base = Path(argv[argv.index('-D')+1])
-                (base/'reel.mp4').write_bytes(b'\\x00\\x00\\x00\\x18ftypisom' + b'0'*100)
+                (base/'reel.mp4').write_bytes(b'\x00\x00\x00\x18ftypisom' + b'0'*100)
                 return subprocess.CompletedProcess(argv, 0, '', '')
             bundle = acquire_public_bundle('https://instagram.com/reel/EXAMPLE1/', Path(td),
                                            yt_runner=fail_yt, gallery_runner=gallery)
@@ -66,7 +66,7 @@ class PublicBundleTests(unittest.TestCase):
             def excess(argv, **kw):
                 base=Path(argv[argv.index('-D')+1])
                 for i in range(1,22):
-                    (base/f'page_{i:02}.jpg').write_bytes(b'\\xff\\xd8\\xff' + b'X'*200)
+                    (base/f'page_{i:02}.jpg').write_bytes(b'\xff\xd8\xff' + b'X'*200)
                 return subprocess.CompletedProcess(argv, 0, '', '')
             with self.assertRaises(PublicBundleError):
                 acquire_public_bundle('https://instagram.com/p/EXAMPLE1/',Path(td),gallery_runner=excess)
