@@ -4,6 +4,14 @@ Evidence-first personal Instagram Reel → searchable knowledge pipeline, design
 
 **State (24 November 2026):** Phase 9 autonomous **DM intake and queue coordination deployed** on isolated Supabase; one real direct `ig_reel` received and persisted. Exactly three owner-approved sender IDs are stored only in the private Supabase allowlist. Postgres cron rechecks queue every five minutes, and official Graph reconciliation checks each sender roughly every 15 minutes. Public Reel caption/metadata and distinct official-topic research can be stored in `reelbrain_reel_knowledge`. **Actual full-video OCR/ASR/VLM worker is implemented in Python but NOT hosted or verified on real media.** Website is NOT hosted. The repository is PUBLIC and contains code and synthetic tests only, no secrets or private media.
 
+### Phase 10 backend status — 24 November 2026
+
+- **Deployed:** dedicated Supabase DM intake, durable job queue, metadata coordinator (5-min cron), 3-sender reconciling and a GitHub Actions **10-minute scheduled batch runner** that has successfully connected to the isolated Reelbrain PostgreSQL database. No additional DB password/variable needs to be entered.
+- **Implemented:** a second public gallery-dl acquisition adapter, 20-asset Instagram carousel/post ingest with per-slide evidence, English/Hindi OCR and dense-text improvements, local multilingual `faster-whisper` ASR, optional hosted Qwen3-VL frame-understanding adapter and structured evidence persistence. Source parsing and synthetic unit tests passed GitHub CI. See `docs/MODEL_PIPELINE_AND_ACCEPTANCE.md`.
+- **Live failure remains:** as of the last observed run, Instagram's anonymous GitHub-hosted acquisition failed through both yt-dlp and gallery-dl; six sources remained `media_pending` with **zero proven audiovisual extraction**. This is a **media-access blocker**, not a database credential problem. Jobs remain queued/retryable with bounded dead-letter instead of being falsely marked processed.
+- **Not deployed:** GPU serving Qwen3-VL, paid provider calls, a permanent 24/7 VM, and the deliberately deferred private website. GitHub Actions checks periodically; it is not a continuous always-on compute host or guaranteed zero-backlog SLA.
+- **Operations:** inspect `.github/workflows/reelbrain-media-batch.yml`, GitHub Actions failures and `public.reelbrain_dm_jobs`; no secrets or user media belong in this PUBLIC repository.
+
 ### Architecture
 
 ```
