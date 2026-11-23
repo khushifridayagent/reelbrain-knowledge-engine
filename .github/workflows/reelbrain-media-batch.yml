@@ -85,12 +85,13 @@ jobs:
         run: |
           python - <<'PY'
           from reelbrain.durable_worker import checked_config, run_one_batch
+          from reelbrain.batch_outcome import require_successful_batch
           # The worker writes failure categories to its isolated database and
           # never logs private Reel URLs or the DB credential here.
           result = run_one_batch(checked_config(), batch_size=1)
           print('Claimed jobs:', len(result))
           print('Outcomes:', [item['status'] for item in result])
-          if any(item['status'] == 'retry_or_dead_letter'
-                 and not item.get('acknowledged_failure') for item in result):
-              raise SystemExit('Queue failure could not be acknowledged.')
+          # A successful retry/dead-letter ACK is NOT successful media analysis.
+          # Failing the run provides accurate GitHub Actions monitoring.
+          require_successful_batch(result)
           PY
