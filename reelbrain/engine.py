@@ -173,7 +173,10 @@ class LocalPipelineEngine:
                     for chunk in iter(lambda:stream.read(1024*1024),b''):
                         sha.update(chunk)
             link_id=pipe.ingest_url(source,tenant)['source_id']
-            receipt=self.store.mark_media_processed(tenant,link_id,saved['source_id'],sha.hexdigest(),partial=bool(errors))
+            receipt=self.store.mark_media_processed(
+                tenant,link_id,saved['source_id'],sha.hexdigest(),
+                partial=bool(errors),
+                model_only_partial=bool(model_only_evidence and not original_evidence))
             saved['processing_receipt_id']=receipt
         saved.update({'stage_errors':errors,'stage_timings_ms':measurements,'stage_observations':{**{k:len(v) for k,v in results.items()},'provided':len(extra)},'external_calls':external_count,'media_is_local':True,
                       'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),
