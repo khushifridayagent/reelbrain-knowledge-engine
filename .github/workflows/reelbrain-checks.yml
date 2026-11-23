@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt -r requirements-site.txt -r requirements-web.txt
       - name: Python tests (real network and model calls are not used)
         run: python -m unittest discover -s tests -t .
       - name: JS parser and coordinator tests
