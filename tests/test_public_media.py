@@ -47,4 +47,22 @@ class PublicMediaTests(unittest.TestCase):
                 acquire_public_reel('https://www.instagram.com/reel/DaQLc80PIBU/',Path(tmp),runner=fake_run)
             self.assertLess(len(str(cm.exception)),300)
 
+
+    def test_reel_downloader_reports_safe_failure_category_without_exposing_original_error(self):
+        cases=[
+            ("ERROR: [Instagram] LOGIN REQUIRED; please provide cookies", "login_required"),
+            ("ERROR: HTTP Error 403: Forbidden", "http_forbidden"),
+            ("ERROR: HTTP Error 429: Too Many Requests", "rate_limited"),
+            ("ERROR: Unable to extract video data", "extractor_unavailable"),
+        ]
+        for raw, category in cases:
+            with self.subTest(category=category):
+                with tempfile.TemporaryDirectory() as tmp:
+                    def fake(cmd, **kwargs):
+                        return subprocess.CompletedProcess(cmd,1,'',raw + ' PRIVATE_TOKEN_SHOULD_NOT_LEAK')
+                    with self.assertRaises(PublicMediaError) as failed:
+                        acquire_public_reel('https://www.instagram.com/reel/DaQLc80PIBU/',Path(tmp),runner=fake)
+                    self.assertIn(category,str(failed.exception))
+                    self.assertNotIn('PRIVATE_TOKEN_SHOULD_NOT_LEAK',str(failed.exception))
+
 if __name__=='__main__':unittest.main()
