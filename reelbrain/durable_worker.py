@@ -62,7 +62,7 @@ def pg_open(db_url:str):
 
 def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->dict:
     from tempfile import TemporaryDirectory
-    from .public_media import acquire_public_reel
+    from .public_bundle import acquire_public_bundle
     with TemporaryDirectory(prefix='rb_reel_worker_') as d:
         db=KnowledgeStore(Path(d)/'isolated_evidence.sqlite')
         try:
@@ -75,11 +75,14 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                         vlm=GeminiVideoResearcher(os.environ['GEMINI_API_KEY'],os.getenv('GEMINI_VIDEO_MODEL',''))
                 return LocalPipelineEngine(store,audio_model=asr,video_model=vlm)
             if acquisition=='yt_dlp_public':
-                # No cookie/login bypass; official source URL only; real bounded MP4 required.
-                media=acquire_public_reel(source_url,Path(d))
-                result=engine_factory(db).ingest(media,source_url,allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
+                # Public-only: yt-dlp then gallery-dl fallback, or full photo
+                # carousel. Every page must pass media-byte validation.
+                bundle=acquire_public_bundle(source_url,Path(d))
+                result=engine_factory(db).ingest(
+                    list(bundle.paths),source_url,
+                    allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
                 result={**result,'media_processed':bool(result.get('processing_receipt_id')),
-                        'provider':'yt-dlp-public','media_deleted_after_processing':True}
+                        'provider':bundle.provider,'media_deleted_after_processing':True}
             elif acquisition=='apify':
                 result=process_instagram_link(db,source_url,
                     options=LinkProcessingOptions(allow_paid=True,allow_external=True,rights_confirmed=True),
