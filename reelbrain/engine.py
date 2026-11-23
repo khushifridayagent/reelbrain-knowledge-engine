@@ -151,13 +151,22 @@ class LocalPipelineEngine:
                 measurements['fact_enrichment']=int((time.monotonic()-start)*1000)
             except Exception as exc:
                 errors['fact_enrichment']=f'{type(exc).__name__}: {exc}'[:250]
-        original_evidence=any(ev.kind in {'ocr','asr','caption','manual','verified_doc'} and ev.text.strip() for ev in observations)
+        original_evidence=any(ev.kind in {'ocr','asr','caption','manual','verified_doc'}
+                              and ev.text.strip() for ev in observations)
+        model_only_evidence=any(ev.kind=='model_inference' and ev.text.strip()
+                                for ev in observations)
         if not original_evidence:
-            errors['all_passes']='no non-generative source observations; Reel remains pending'
+            if model_only_evidence:
+                # Media was actually provided, and the model generated useful
+                # descriptions. Save as explicitly *partial* inference only;
+                # no inferred URL can become an independently proven resource.
+                errors['no_source_evidence']='visual inference only; OCR/ASR source observations absent'
+            else:
+                errors['all_passes']='no source observations or visual inference; media remains pending'
         saved['status']='partial' if errors else 'evidence_saved'
         self.store.con.execute('UPDATE sources SET status=? WHERE id=? AND tenant=?',
                                (saved['status'],saved['source_id'],tenant))
-        if original_evidence:
+        if original_evidence or model_only_evidence:
             sha=hashlib.sha256()
             for asset in media_assets:
                 with asset.open('rb') as stream:
