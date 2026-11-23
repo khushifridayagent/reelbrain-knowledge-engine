@@ -14,10 +14,11 @@ SELECT cron.schedule(
 -- each account is checked about once every 15 minutes.
 SELECT cron.schedule('reelbrain-three-approved-sender-reconcile','*/5 * * * *',
   $$SELECT public.reelbrain_dispatch_dm_reconcile(
-     CASE ((extract(minute FROM now())::integer / 5) % 3)
-       WHEN 0 THEN 'rudrzy'
-       WHEN 1 THEN 'rudra_625003'
-       ELSE 'hritiksingh_8'
-     END
+     (SELECT CASE WHEN count(*)=3 THEN
+       (SELECT username FROM (SELECT username,row_number() OVER(ORDER BY username) AS n
+                             FROM public.reelbrain_sender_candidates WHERE approved=true) s
+        WHERE s.n = 1 + (floor(extract(epoch FROM now())/300)::bigint % 3))
+       ELSE NULL END
+      FROM public.reelbrain_sender_candidates WHERE approved=true)
    );$$
 );
