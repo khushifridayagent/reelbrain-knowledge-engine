@@ -26,7 +26,9 @@ class PublicBundle:
 
 
 def _sort_key(path: Path) -> list:
-    return [int(part) if part.isdigit() else part.lower()
+    # Homogeneous tuple keys prevent mixed numeric/text filenames from
+    # comparing int against str during carousel ordering.
+    return [(1,int(part)) if part.isdigit() else (0,part.lower())
             for part in re.split(r'(\d+)', path.name)]
 
 
