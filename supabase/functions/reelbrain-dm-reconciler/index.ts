@@ -1,0 +1,104 @@
+/** Reelbrain official Instagram Graph 1:1 DM reconciliation.
+ * Best-effort recovery for missed webhook deliveries. Reads ONLY approved
+ * sender conversations; persists no raw private message texts or access tokens.
+ * Can still report needs_review if Graph omits Reel attachments.
+ */
+import { inspectParticipantIds, reelEventsFromGraph } from './core.mjs';
+const env=(k:string)=>Deno.env.get(k)?.trim()||'';
+const base=env('SUPABASE_URL').replace(/\/$/,'');
+const role=env('SUPABASE_SERVICE_ROLE_KEY');
+const token=env('META_INSTAGRAM_ACCESS_TOKEN');
+const professional=env('META_IG_PROFESSIONAL_ID');
+const json=(d:unknown,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
+const headers=()=>({'apikey':role,'authorization':'Bearer '+role,'content-type':'application/json'});
+const digest=async(text:string)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(x=>x.toString(16).padStart(2,'0')).join('');
+const ident=(x:string)=>/^[A-Za-z0-9_-]{5,180}$/.test(x);
+async function db(path:string,options:RequestInit={}){
+ const r=await fetch(base+'/rest/v1/'+path,{...options,headers:{...headers(),...(options.headers as Record<string,string>||{})},signal:AbortSignal.timeout(7000)});
+ if(!r.ok)throw new Error('db_http_'+r.status);
+ return await r.json().catch(()=>null);
+}
+async function graph(path:string,params:Record<string,string>={},ms=7000):Promise<any>{
+ const url=new URL('https://graph.facebook.com/v26.0/'+path);
+ for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
+ const r=await fetch(url,{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(ms)});
+ const result=await r.json().catch(()=>null);
+ if(!r.ok || !result || typeof result!=='object')throw new Error('graph_http_'+r.status);
+ return result;
+}
+function datesAreRecent(value:unknown):boolean{
+ if(typeof value!=='string')return true;
+ const when=Date.parse(value);
+ return Number.isFinite(when) && when<=Date.now()+60000 && when>=Date.now()-72*3600*1000;
+}
+Deno.serve(async req=>{
+ if(req.method!=='POST')return json({error:'method_not_allowed'},405);
+ if(!base.includes('xlkdzrhzizuftbnitodr.supabase.co')||!role)return json({error:'isolated_database_not_configured'},503);
+ const body=await req.text();if(body.length>512)return json({error:'invalid_request'},413);
+ let nonce:unknown, selectedName:unknown;try{const parsed=JSON.parse(body);nonce=parsed.nonce;selectedName=parsed.sender_username;}catch{return json({error:'invalid_request'},400)}
+ if(typeof nonce!=='string'||!/^[a-f0-9]{64}$/.test(nonce))return json({error:'unauthorized'},403);
+ let authorized=false;
+ try{authorized=await db('rpc/reelbrain_claim_media_tick',{method:'POST',body:JSON.stringify({hash_arg:await digest(nonce)})})===true;}
+ catch{return json({error:'authorization_failed'},503)}
+ if(!authorized)return json({error:'unauthorized_or_expired'},403);
+ if(!token || !/^[0-9]{3,32}$/.test(professional))return json({error:'meta_connection_not_configured'},503);
+ let examined=0,recorded=0,newReceipts=0,linkedReels=0,errors=0;
+ let senders:any[];
+ try{senders=await db('reelbrain_sender_candidates?select=sender_id,username&approved=eq.true&limit=10');}
+ catch{return json({error:'allowlist_unavailable'},503)}
+ if(!Array.isArray(senders))return json({error:'invalid_allowlist'},503);
+ const filtered=senders.filter(x=>typeof selectedName==='string' && typeof x?.username==='string' && x.username===selectedName);
+ if(filtered.length!==1)return json({error:'one_sender_target_required'},400);
+ for(const user of filtered){
+   const sender=String(user.sender_id||'');if(!/^[0-9]{3,32}$/.test(sender)||sender===professional)continue;
+   let checked=0,newSaved=0,unavailable=false;
+   try{
+     const history=await db('reelbrain_dm_receipts?select=message_id&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
+     const already=new Set((Array.isArray(history)?history:[]).map((x:any)=>String(x.message_id||'')));
+     let conv=await graph(encodeURIComponent(professional)+'/conversations',{platform:'instagram',user_id:sender,limit:'5'});
+     let threads=Array.isArray(conv.data)?conv.data.slice(0,5):[];
+     if(!threads.length){conv=await graph(encodeURIComponent(professional)+'/conversations',{platform:'instagram',limit:'15'});threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];}
+     const events:any[]=[];
+     for(const thread of threads){
+       if(!ident(String(thread.id||'')) || events.length>=8)continue;
+       const tid=encodeURIComponent(thread.id);
+       const details=await graph(tid,{fields:'participants,updated_time'}).catch(()=>null);
+       if(!details || !Array.isArray(details.participants?.data) || details.participants.data.length!==2 ||
+           !inspectParticipantIds(details.participants,sender,professional))continue;
+       if(!datesAreRecent(details.updated_time))continue;
+       const listing=await graph(tid+'/messages',{limit:'35'}).catch(()=>null);
+       const items=Array.isArray(listing?.data)?listing.data:[];
+       for(const item of items){
+         if(events.length>=8)break;
+         const mid=String(item?.id||'');if(!ident(mid) || already.has(mid))continue;
+         if(!datesAreRecent(item?.created_time))continue;
+         let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'}).catch(()=>null);
+         if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'}).catch(()=>null);}
+         if(!detail) {unavailable=true;continue;}
+         if(!datesAreRecent(detail.created_time)||String(detail.from?.id)!==sender)continue;
+         // No private message string persists; only canonical URL, attachment type, Meta mid.
+         events.push(...reelEventsFromGraph([detail],sender,professional));
+         checked++;
+       }
+     }
+     if(events.length){
+       const result=await db('rpc/reelbrain_accept_dm_batch',{method:'POST',body:JSON.stringify({_events:events})});
+       recorded+=result?.received_messages||0;
+       newReceipts+=result?.new_receipts||0;
+       linkedReels+=result?.reel_links_seen||0;
+       newSaved=result?.new_receipts||0;
+     }
+   }catch(e){unavailable=true;errors++;console.error('reelbrain_reconcile_sender_failed',String((e as Error).message).slice(0,50));}
+   examined+=checked;
+   try{
+    await db('reelbrain_dm_reconciliation_state?on_conflict=sender_igsid',{
+     method:'POST',headers:{prefer:'resolution=merge-duplicates,return=minimal'},
+     body:JSON.stringify({sender_igsid:sender,last_checked_at:new Date().toISOString(),last_new_receipts:newSaved,
+       last_error:unavailable?'partial_graph_history_unavailable':null})
+    });
+   }catch{errors++;}
+ }
+ return json({accepted:true,approved_accounts_checked:filtered.length,inspected_new_messages:examined,
+   receipts_seen:recorded,new_receipts:newReceipts,reel_links_seen:linkedReels,partial_failures:errors,
+   note:'Official Graph history may omit native Reel attachment URLs; webhook remains primary intake.'},errors?207:200);
+});

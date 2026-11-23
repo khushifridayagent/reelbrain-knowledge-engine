@@ -1,0 +1,7 @@
+# Local core/runtime; install only in a new isolated Python environment.
+pydantic>=2.8,<3
+numpy>=1.26,<3
+opencv-python-headless>=4.8,<5
+Pillow>=10,<13
+httpx>=0.27,<1
+# Required system packages: tesseract-ocr, ffmpeg (for video/audio tests and CLI)

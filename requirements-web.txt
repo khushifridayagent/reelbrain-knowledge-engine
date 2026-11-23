@@ -1,0 +1,4 @@
+# Isolated OPTIONAL UI; do not install in any existing application environment.
+fastapi>=0.115,<1
+uvicorn>=0.35,<1
+python-multipart>=0.0.20,<1

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "reelbrain-isolated"
+version = "0.8.0"
+description = "Evidence-first private Reel and research knowledge extraction — local verified slice"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.8,<3", "numpy>=1.26,<3", "opencv-python-headless>=4.8,<5", "Pillow>=10,<13", "httpx>=0.27,<1"]
+[project.optional-dependencies]
+web = ["fastapi>=0.115,<1", "uvicorn>=0.35,<1", "python-multipart>=0.0.20,<1"]
+[project.scripts]
+reelbrain = "reelbrain.cli:run"
+[tool.setuptools.packages.find]
+include = ["reelbrain*"]

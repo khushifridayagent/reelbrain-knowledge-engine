@@ -1,0 +1,55 @@
+name: Reelbrain isolated validation
+on:
+  pull_request:
+  push:
+    branches: [feat/instagram-dm-research-v08]
+permissions:
+  contents: read
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install local dependencies and media test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
+          python -m pip install -r requirements.txt -r requirements-site.txt -r requirements-web.txt
+      - name: Python tests (real network and model calls are not used)
+        run: python -m unittest discover -s tests -t .
+      - name: JS parser and coordinator tests
+        run: node --test tests/*.test.mjs
+      - name: Verify isolated Supabase connection (read-only, no credentials printed)
+        if: github.event_name == 'push' && github.repository == 'khushifridayagent/reelbrain-knowledge-engine'
+        env:
+          REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os,sys
+          from urllib.parse import urlsplit
+          uri=os.environ.get('REELBRAIN_DB_URL','')
+          if not uri:
+              print('DB_PREFLIGHT: NOT_CONFIGURED (repository secret REELBRAIN_DB_URL missing)')
+              sys.exit(0)
+          try:
+              parsed=urlsplit(uri)
+              ref='xlkdzrhzizuftbnitodr'
+              if not (ref in (parsed.username or '').lower() or ref in (parsed.hostname or '').lower()):
+                  raise ValueError('not_reelbrain_project')
+              import psycopg
+              with psycopg.connect(uri,connect_timeout=8,options='-c default_transaction_read_only=on') as pg:
+                  with pg.cursor() as cur:
+                      cur.execute('SELECT count(*) FROM public.reelbrain_dm_jobs')
+                      total=cur.fetchone()[0]
+              print('DB_PREFLIGHT: CONNECTED_TO_ISOLATED_REELBRAIN, queued_records='+str(total))
+          except Exception as exc:
+              print('DB_PREFLIGHT: FAILED, error_type='+type(exc).__name__)
+              sys.exit(1)
+          PY
