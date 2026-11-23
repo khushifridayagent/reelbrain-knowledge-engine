@@ -1,0 +1,74 @@
+name: Reelbrain scheduled media batch (opt-in)
+
+# A bounded alternative to an always-on VM; scheduled runs are best-effort,
+# not a guarantee of continuous service or successful Instagram downloads.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reelbrain-media-batch
+  cancel-in-progress: false
+
+jobs:
+  process-one-reel:
+    # Public repo stays inert until the owner explicitly enables it.
+    if: ${{ vars.REELBRAIN_WORKER_ENABLED == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+      REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED: '1'
+      REELBRAIN_MEDIA_ACQUISITION: 'yt_dlp_public'
+      REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD: '1'
+      # No paid acquisition, private/cookie access or model uploads by default.
+      REELBRAIN_PAID_PROVIDER_APPROVED: '0'
+      REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED: '0'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-worker.txt
+      - name: Require dedicated private database secret
+        shell: bash
+        run: |
+          if [[ -z "${REELBRAIN_DB_URL}" ]]; then
+            echo "::error::Set REELBRAIN_DB_URL as an Actions secret before enabling this job."
+            exit 1
+          fi
+          echo "::add-mask::${REELBRAIN_DB_URL}"
+      - name: Install real media tooling
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Preflight without claiming a Reel
+        run: |
+          python - <<'PY'
+          from reelbrain.durable_worker import checked_config
+          checked_config()
+          print('Dedicated worker preflight passed; private credentials not printed.')
+          PY
+      - name: Process at most one queued Reel and acknowledge outcome
+        run: |
+          python - <<'PY'
+          from reelbrain.durable_worker import checked_config, run_one_batch
+          # The worker writes failure categories to its isolated database and
+          # never logs private Reel URLs or the DB credential here.
+          result = run_one_batch(checked_config(), batch_size=1)
+          print('Claimed jobs:', len(result))
+          print('Outcomes:', [item['status'] for item in result])
+          if any(item['status'] == 'retry_or_dead_letter'
+                 and not item.get('acknowledged_failure') for item in result):
+              raise SystemExit('Queue failure could not be acknowledged.')
+          PY
