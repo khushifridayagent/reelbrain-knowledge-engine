@@ -15,7 +15,7 @@ RETURNS bigint LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path=''
 AS $$
 DECLARE nonce text:=encode(extensions.gen_random_bytes(32),'hex');request_id bigint;
 BEGIN
- IF sender_name NOT IN ('rudrzy','rudra_625003','hritiksingh_8') THEN RAISE EXCEPTION 'unapproved reconciliation target'; END IF;
+ IF sender_name IS NULL OR NOT EXISTS (SELECT 1 FROM public.reelbrain_sender_candidates WHERE username=sender_name AND approved=true) THEN RAISE EXCEPTION 'unapproved reconciliation target'; END IF;
  INSERT INTO public.reelbrain_media_tick_tokens(token_hash,expires_at)
  VALUES (encode(extensions.digest(nonce,'sha256'),'hex'),now()+interval '8 minutes');
  SELECT net.http_post(
