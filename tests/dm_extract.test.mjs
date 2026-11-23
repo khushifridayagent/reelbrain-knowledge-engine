@@ -21,13 +21,12 @@ test('duplicate Reel sent by two accounts gives two distinct receipts, same queu
  const out=collectApprovedEvents(body,approved,receiver);
  assert.equal(out.length,2);assert.deepEqual(out[0].urls,out[1].urls);
 });
-test('reject outsider, wrong receiver, group metadata and echo',()=>{
+test('ignore outsiders, group metadata and echoes',()=>{
  const a=event('12345','A',{text:'https://instagram.com/reel/A1234/'});
  const b=event('intruder','B',{text:'https://instagram.com/reel/B1234/'});
  const c={...event('67890','C',{text:'https://instagram.com/reel/C1234/'}),thread:{participants:4}};
  const d={...event('44444','D',{text:'hello',is_echo:true})};
- const e={...event('12345','E',{text:'https://instagram.com/reel/E1234/'}),recipient:{id:'other'}};
- assert.deepEqual(collectApprovedEvents(envelope(a,b,c,d,e),approved,receiver).map(x=>x.mid),['A']);
+ assert.deepEqual(collectApprovedEvents(envelope(a,b,c,d),approved,receiver).map(x=>x.mid),['A']);
 });
 test('parses url from Reel attachment, share attachment and nested payloads',()=>{
  const body=envelope(event('12345','F',{attachments:[
@@ -41,4 +40,17 @@ test('parses url from Reel attachment, share attachment and nested payloads',()=
 test('detects excessive event lists instead of silently discarding tail',()=>{
  const array=Array.from({length:101},(_,i)=>event('12345',String(i),{text:'a'}));
  assert.throws(()=>collectApprovedEvents(envelope(...array),approved,receiver),/too_many_events/);
+});
+
+test('approved sender recipient mismatch is an error, not a silently acknowledged DM',()=>{
+ const x={...event('12345','E',{text:'https://instagram.com/reel/E1234/'}),recipient:{id:'unexpected'}};
+ assert.throws(()=>collectApprovedEvents(envelope(x),approved,receiver),/approved_sender_unexpected_recipient/);
+});
+test('approved sender message without stable Meta message ID is not silently acknowledged',()=>{
+ const x=event('12345','E',{text:'https://instagram.com/reel/E1234/'});delete x.message.mid;
+ assert.throws(()=>collectApprovedEvents(envelope(x),approved,receiver),/approved_message_missing_id/);
+});
+test('alternate signed message envelope is flagged rather than treated as no new DM',()=>{
+ const x={object:'instagram',entry:[{id:receiver,changes:[{field:'messages',value:{message:{text:'https://instagram.com/reel/E1234/'}}}]}]};
+ assert.throws(()=>collectApprovedEvents(x,approved,receiver),/unhandled_message_envelope/);
 });
