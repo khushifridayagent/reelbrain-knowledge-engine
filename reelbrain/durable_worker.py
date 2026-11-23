@@ -10,6 +10,7 @@ Never reuse other projects.
 from __future__ import annotations
 import json,os,time
 from pathlib import Path
+from urllib.parse import urlsplit
 from contextlib import contextmanager
 from .store import KnowledgeStore
 from .remote_reel_writer import save_reel_to_postgres
@@ -22,7 +23,21 @@ def flag(k:str)->bool:return os.getenv(k,'').lower() in ('true','yes','1')
 def checked_config()->dict:
     """Fail closed before claiming any queued job, with no surprise paid calls."""
     missing=[]
-    if not os.getenv('REELBRAIN_DB_URL'):missing.append('REELBRAIN_DB_URL')
+    db_url=os.getenv('REELBRAIN_DB_URL','')
+    if not db_url:
+        missing.append('REELBRAIN_DB_URL')
+    else:
+        # Enforce that GitHub never claims work from any unrelated Supabase
+        # project even if the owner accidentally saved the wrong URI.
+        try:
+            uri=urlsplit(db_url)
+            project_ref='xlkdzrhzizuftbnitodr'
+            valid=(uri.scheme in ('postgres','postgresql') and
+                (project_ref in (uri.username or '').lower() or
+                 project_ref in (uri.hostname or '').lower()))
+        except ValueError:
+            valid=False
+        if not valid:missing.append('REELBRAIN_DB_URL must target isolated Reelbrain project')
     mode=os.getenv('REELBRAIN_MEDIA_ACQUISITION','yt_dlp_public').lower().strip()
     if mode=='apify':
         if not flag('REELBRAIN_SOURCE_RIGHTS_CONFIRMED'):missing.append('REELBRAIN_SOURCE_RIGHTS_CONFIRMED')
