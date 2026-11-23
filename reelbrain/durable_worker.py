@@ -3,8 +3,9 @@
 The webhook persists URLs and returns immediately. This worker is a separate
 process and must run on authorized compute for unattended jobs.
 
-RUN only after configuring REELBRAIN_DB_URL, APIFY_API_TOKEN and permission
-flags for the source material and provider spend. Never reuse other projects.
+RUN only after configuring the dedicated REELBRAIN_DB_URL and user-approved
+public media research flags. Apify is optional and explicitly paid-only.
+Never reuse other projects.
 """
 from __future__ import annotations
 import json,os,time
@@ -22,12 +23,17 @@ def checked_config()->dict:
     """Fail closed before claiming any queued job, with no surprise paid calls."""
     missing=[]
     if not os.getenv('REELBRAIN_DB_URL'):missing.append('REELBRAIN_DB_URL')
-    if not flag('REELBRAIN_SOURCE_RIGHTS_CONFIRMED'):missing.append('REELBRAIN_SOURCE_RIGHTS_CONFIRMED')
-    mode=os.getenv('REELBRAIN_MEDIA_ACQUISITION','apify').lower().strip()
+    mode=os.getenv('REELBRAIN_MEDIA_ACQUISITION','yt_dlp_public').lower().strip()
     if mode=='apify':
+        if not flag('REELBRAIN_SOURCE_RIGHTS_CONFIRMED'):missing.append('REELBRAIN_SOURCE_RIGHTS_CONFIRMED')
         if not os.getenv('APIFY_API_TOKEN'):missing.append('APIFY_API_TOKEN')
         if not flag('REELBRAIN_PAID_PROVIDER_APPROVED'):missing.append('REELBRAIN_PAID_PROVIDER_APPROVED')
     elif mode=='yt_dlp_public':
+        # Personal knowledge extraction from accessible public media is not
+        # represented as copyright ownership. Never accept private/login-only
+        # URLs or bypass permissions; acquisition remains best effort.
+        if not (flag('REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED') or flag('REELBRAIN_SOURCE_RIGHTS_CONFIRMED')):
+            missing.append('REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED')
         if not flag('REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD'):missing.append('REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD')
     else:missing.append('REELBRAIN_MEDIA_ACQUISITION (must be apify or yt_dlp_public)')
     if missing:raise RuntimeError('Worker will not claim jobs before configured: '+', '.join(missing))
