@@ -13,13 +13,40 @@ def _require(binary:str):
     if not shutil.which(binary):raise MediaError(f'{binary} is not installed')
 
 def recognize_image(path:str|Path, locator:str='image:1')->list[Observation]:
+    """Dense image/post OCR, respecting orientation and small on-screen text."""
     _require('tesseract')
     p=Path(path)
-    if not p.is_file() or p.stat().st_size>60*1024*1024:raise MediaError('missing/oversized image')
+    if not p.is_file() or p.stat().st_size>60*1024*1024:
+        raise MediaError('missing/oversized image')
+    from PIL import Image,ImageOps
+    import tempfile
+    # Normalize EXIF orientation and upscale small text before Tesseract.
+    # Keep original bytes unmodified; this transient image is never persisted.
     try:
-        result=subprocess.run(['tesseract',str(p),'stdout','-l','eng'],text=True,capture_output=True,timeout=25,check=True)
-    except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as exc:raise MediaError(f'OCR failed: {exc}') from exc
-    text=result.stdout.strip()
+        with tempfile.TemporaryDirectory(prefix='rb_img_ocr_') as td:
+            with Image.open(p) as img:
+                img=ImageOps.exif_transpose(img).convert('RGB')
+                if img.width*img.height>18_000_000:
+                    raise MediaError('image resolution exceeds OCR memory budget')
+                scale=min(2.5,2400/max(img.width,img.height))
+                if scale>1.1:
+                    img=img.resize((int(img.width*scale),int(img.height*scale)),
+                                   Image.Resampling.LANCZOS)
+                image_input=Path(td)/'ocr.png'
+                img.save(image_input)
+            output=[]
+            for psm in (3,6):
+                try:
+                    result=subprocess.run(
+                        ['tesseract',str(image_input),'stdout','--psm',str(psm),'-l','eng+hin'],
+                        text=True,capture_output=True,timeout=25,check=True)
+                except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as exc:
+                    raise MediaError('OCR image pass failed') from exc
+                output.append(result.stdout.strip())
+            # Preserve the reading with best URL recall, then richer text.
+            text=max(output,key=lambda raw:(len(candidate_urls(raw)),len(raw)))
+    except (OSError,ValueError) as exc:
+        raise MediaError('Unreadable image or failed OCR normalization') from exc
     return [Observation(text,kind='ocr',locator=locator)] if text else []
 
 def analyze_video(path:str|Path,frame_rate:float=4.,max_seconds:float=180.,max_ocr_frames:int=120, scene_threshold:float=8.)->tuple[list[Observation],dict]:
