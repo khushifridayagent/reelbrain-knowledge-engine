@@ -54,3 +54,18 @@ test('alternate signed message envelope is flagged rather than treated as no new
  const x={object:'instagram',entry:[{id:receiver,changes:[{field:'messages',value:{message:{text:'https://instagram.com/reel/E1234/'}}}]}]};
  assert.throws(()=>collectApprovedEvents(x,approved,receiver),/unhandled_message_envelope/);
 });
+
+test('direct Reel share inside message.shares data array must create queue URL',()=>{
+ const body=envelope(event('12345','SHARE1',{
+   shares:{data:[{type:'ig_reel',payload:{title:'Reel',url:'https://www.instagram.com/reel/DS4abcd/?igshid=123',id:'178002200'}}]}
+ }));
+ const [receipt]=collectApprovedEvents(body,approved,receiver);
+ assert.deepEqual(receipt.urls,['https://www.instagram.com/reel/DS4abcd/']);
+ assert.equal(receipt.status,'queued');
+});
+test('single attachment object also recognized as Reel share',()=>{
+ const [receipt]=collectApprovedEvents(envelope(event('12345','SHARE2',{
+   attachment:{type:'ig_reel',payload:{url:'https://www.instagram.com/reel/DS4efgh/'}}
+ })),approved,receiver);
+ assert.deepEqual(receipt.urls,['https://www.instagram.com/reel/DS4efgh/']);
+});
