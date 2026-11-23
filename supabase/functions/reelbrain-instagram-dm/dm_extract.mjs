@@ -16,14 +16,14 @@ export function canonical(input){
 }
 
 function gatherStrings(obj, acc, depth=0){
-  if(depth>4 || acc.length>=80 || obj===null || obj===undefined)return;
+  if(depth>6 || acc.length>=80 || obj===null || obj===undefined)return;
   if(typeof obj==='string'){
     if(obj.length<=20000 && obj.includes('instagram.com'))acc.push(obj);
   } else if(Array.isArray(obj)){
     for(const item of obj.slice(0,30))gatherStrings(item,acc,depth+1);
   }else if(typeof obj==='object'){
     for(const [key,value] of Object.entries(obj).slice(0,40)){
-      if(['url','permalink','link','text','media','share','story','reel','attachments','payload','caption'].includes(key))gatherStrings(value,acc,depth+1);
+      if(['url','permalink','link','text','media','share','story','reel','attachments','attachment','shares','shared_media','source_url','payload','data','caption'].includes(key))gatherStrings(value,acc,depth+1);
     }
   }
 }
@@ -32,6 +32,9 @@ export function extractLinks(message){
   const texts=[];
   gatherStrings(message.text,texts);
   gatherStrings(message.attachments,texts);
+  gatherStrings(message.attachment,texts);
+  gatherStrings(message.shares,texts);
+  gatherStrings(message.shared_media,texts);
   gatherStrings(message.share,texts);
   gatherStrings(message.reel,texts);
   const urls=new Set();
@@ -67,8 +70,10 @@ export function collectApprovedEvents(payload,allowed,receiver){
       if(typeof msg.mid!=='string' || !msg.mid || msg.mid.length>256)throw new Error('approved_message_missing_id');
       if(Array.isArray(msg.attachments) && msg.attachments.length>20)throw new Error('too_many_attachments');
       const urls=extractLinks(msg);
-      const kinds=Array.isArray(msg.attachments)?msg.attachments.slice(0,20).map(a=>String(a?.type||'unknown').slice(0,50)):[];
-      const suspected=kinds.length>0 || !!msg.share || !!msg.reel || (typeof msg.text==='string' && /(?:reel|instagram|http|www\.)/i.test(msg.text));
+      const kinds=Array.isArray(msg.attachments)?msg.attachments.slice(0,20).map(a=>String(a?.type||'unknown').slice(0,50)):
+        msg.attachment?[String(msg.attachment.type||'unknown').slice(0,50)]:[];
+      if(msg.shares && !kinds.length)kinds.push('shared_media');
+      const suspected=kinds.length>0 || !!msg.attachment || !!msg.shares || !!msg.shared_media || !!msg.share || !!msg.reel || (typeof msg.text==='string' && /(?:reel|instagram|http|www\.)/i.test(msg.text));
       result.push({sid:sender,mid:msg.mid,urls,status:urls.length?'queued':(suspected?'needs_review':'no_reel_link'),attachment_types:kinds});
     }
   }
