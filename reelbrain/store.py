@@ -181,8 +181,11 @@ class KnowledgeStore:
         return [dict(row) | {'provenance':'user_provided_note_not_reel_evidence'} for row in rows]
 
     def mark_media_processed(self, tenant: str, reel_source_id: str, result_source_id: str,
-                             media_sha256: str, partial: bool = False) -> str:
-        # A model's inference alone cannot prove that Reel media was actually observed.
+                             media_sha256: str, partial: bool = False,
+                             model_only_partial: bool = False) -> str:
+        # Strict default: no model-only receipt. The explicit partial-only
+        # exception records a REAL acquired asset plus model observation,
+        # never a verified or fully processed Reel.
         if not re.fullmatch(r'[0-9a-f]{64}', media_sha256):
             raise ValueError('media hash must be a SHA-256 hex digest')
         rid = digest(tenant, reel_source_id, result_source_id, media_sha256)
@@ -195,7 +198,11 @@ class KnowledgeStore:
                 AND kind IN ('ocr','asr','caption','manual','verified_doc')
                 AND length(trim(verbatim))>0''', (result_source_id,)).fetchone()['count']
             if original == 0:
-                raise ValueError('missing non-generative evidence; cannot mark media processed')
+                model_count = self.con.execute('''SELECT COUNT(*) AS count FROM evidence WHERE source_id=?
+                    AND kind='model_inference' AND length(trim(verbatim))>0''',
+                    (result_source_id,)).fetchone()['count']
+                if not (partial and model_only_partial and model_count>0):
+                    raise ValueError('missing non-generative evidence; cannot mark media processed')
             status = 'partial' if partial else 'processed'
             self.con.execute('INSERT OR IGNORE INTO reel_processing VALUES (?,?,?,?,?,?,?)',
                              (rid,tenant,reel_source_id,result_source_id,media_sha256,status,utc()))

@@ -33,7 +33,7 @@ def hamming(a: np.ndarray, b: np.ndarray) -> int:
     return int(np.count_nonzero(a != b))
 
 
-def ocr(img_bgr: np.ndarray, psm: int = 6, lang: str = "eng") -> "tuple[str, float]":
+def ocr(img_bgr: np.ndarray, psm: int = 6, lang: str = "eng+hin") -> "tuple[str, float]":
     """Tesseract on an upscaled grayscale frame. Returns (text, mean word confidence)."""
     g = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     if g.shape[1] < 1600:

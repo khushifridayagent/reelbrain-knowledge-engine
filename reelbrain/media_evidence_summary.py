@@ -36,7 +36,11 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
             target.append(row)
     ocr_succeeded = media_processed and 'ocr' in counts and 'ocr' not in errors
     asr_succeeded = media_processed and 'asr' in counts and 'asr' not in errors
-    video_analyzed = ocr_succeeded and int(counts.get('ocr') or 0) > 0
+    # This flag records that real acquired media received a successful visual
+    # pass, including a labeled VLM inference; it is never external factual
+    # verification. Separate source_observations and model_inferences below.
+    vlm_succeeded = media_processed and int(counts.get('vlm') or 0)>0 and 'vlm' not in errors
+    video_analyzed = (ocr_succeeded and int(counts.get('ocr') or 0) > 0) or vlm_succeeded
     return {
         'video_analyzed': video_analyzed,
         'audio_transcribed': asr_succeeded and int(counts.get('asr') or 0) > 0,

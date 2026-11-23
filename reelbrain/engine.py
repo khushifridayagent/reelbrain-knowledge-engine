@@ -49,18 +49,63 @@ class LocalPipelineEngine:
             audio=self.audio_extractor(media) if self.audio_extractor else extract_audio(media,Path(td)/'sound.wav')
             return self.audio_model.transcribe(Path(audio))
 
-    def ingest(self,media_path:str|Path,source_url:str,tenant:str='personal',allow_external:bool=False,
+    def ingest(self,media_path:str|Path|list[Path]|tuple[Path,...],source_url:str,
+               tenant:str='personal',allow_external:bool=False,
                extra_observations:list[Observation]|None=None)->dict:
-        media=Path(media_path)
-        if not media.is_file():raise FileNotFoundError(media)
-        if media.stat().st_size>350*1024*1024:raise ValueError('local media over 350MB budget')
+        """Ingest a single video or a full 1–20-page mixed carousel.
+
+        Each slide keeps its own evidence locator; one canonical source and
+        receipt represent the complete ordered bundle.
+        """
+        inputs = list(media_path) if isinstance(media_path,(list,tuple)) else [media_path]
+        if not 1 <= len(inputs) <= 20:raise ValueError('media bundle must contain 1–20 assets')
+        media_assets = [Path(p) for p in inputs]
+        for asset in media_assets:
+            if not asset.is_file():raise FileNotFoundError(asset)
+        if sum(p.stat().st_size for p in media_assets)>350*1024*1024:
+            raise ValueError('local media bundle over 350MB budget')
+        media=media_assets[0]
         source=canonicalize_instagram(source_url)
         external_count=int(self.audio_model is not None)+int(self.video_model is not None)+int(self.fact_model is not None)
         if external_count and not allow_external:
             raise RemoteConsentRequired('audio/video uploads require explicit --allow-external')
-        tasks={'ocr':lambda:self.ocr(media)}
-        if self.audio_model is not None:tasks['asr']=lambda:self._transcribe(media)
-        if self.video_model is not None:tasks['vlm']=lambda:self.video_model.analyze(media)
+        slide_failures=[]
+        def read_all_pages():
+            observations=[]
+            for idx,asset in enumerate(media_assets,1):
+                try:
+                    found=self.ocr(asset)
+                    if not isinstance(found,list):raise TypeError('OCR output must be a list')
+                    for ev in found:
+                        if not isinstance(ev,Observation):raise TypeError('OCR output must contain typed observations')
+                        locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
+                        observations.append(Observation(ev.text,kind=ev.kind,locator=locator,confidence=ev.confidence))
+                except Exception as exc:
+                    if len(media_assets)==1:raise
+                    slide_failures.append(f'slide:{idx:02d}:{type(exc).__name__}')
+            return observations
+        video_assets=[p for p in media_assets if p.suffix.lower() in
+                      {'.mp4','.mov','.mkv','.webm','.avi'}]
+        def transcribe_all():
+            observations=[]
+            for idx,asset in enumerate(media_assets,1):
+                if asset not in video_assets:continue
+                for ev in self._transcribe(asset):
+                    locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
+                    observations.append(Observation(ev.text,kind=ev.kind,locator=locator,confidence=ev.confidence))
+            return observations
+        def video_understanding():
+            observations=[]
+            for idx,asset in enumerate(media_assets,1):
+                # Image-capable VLM adapters may interpret static carousel pages
+                # as well as video clips. Models return inferences, never proof.
+                for ev in self.video_model.analyze(asset):
+                    locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
+                    observations.append(Observation(ev.text,kind='model_inference',locator=locator,confidence=ev.confidence))
+            return observations
+        tasks={'ocr':read_all_pages}
+        if self.audio_model is not None and video_assets:tasks['asr']=transcribe_all
+        if self.video_model is not None:tasks['vlm']=video_understanding
         measurements={};errors={};results={}
         def timed(label,func):
             start=time.monotonic()
@@ -81,13 +126,16 @@ class LocalPipelineEngine:
                     measurements[stage]=elapsed
                 except Exception as exc:
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
+        if slide_failures:
+            errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
         extra=list(extra_observations or [])
         if not all(isinstance(ev,Observation) and ev.kind in ('caption','asr','manual','document') for ev in extra):
             raise ValueError('external observations must be typed source evidence, not model output')
         observations=sum((results.get(name,[]) for name in ('ocr','asr','vlm')),[])+extra
         candidates=[candidate for item in observations for candidate in candidate_urls(item.text)]
         pipe=KnowledgePipeline(self.store)
-        saved=pipe.ingest_evidence(media.name,source,'reel' if '/reel/' in source else 'carousel',observations,candidates,tenant=tenant)
+        source_name=('bundle:'+source) if len(media_assets)>1 else media.name
+        saved=pipe.ingest_evidence(source_name,source,'reel' if '/reel/' in source else 'carousel',observations,candidates,tenant=tenant)
         saved['facts_accepted']=0
         saved['facts_rejected']=[]
         if self.fact_model is not None and observations:
@@ -103,21 +151,34 @@ class LocalPipelineEngine:
                 measurements['fact_enrichment']=int((time.monotonic()-start)*1000)
             except Exception as exc:
                 errors['fact_enrichment']=f'{type(exc).__name__}: {exc}'[:250]
-        original_evidence=any(ev.kind in {'ocr','asr','caption','manual','verified_doc'} and ev.text.strip() for ev in observations)
+        original_evidence=any(ev.kind in {'ocr','asr','caption','manual','verified_doc'}
+                              and ev.text.strip() for ev in observations)
+        model_only_evidence=any(ev.kind=='model_inference' and ev.text.strip()
+                                for ev in observations)
         if not original_evidence:
-            errors['all_passes']='no non-generative source observations; Reel remains pending'
+            if model_only_evidence:
+                # Media was actually provided, and the model generated useful
+                # descriptions. Save as explicitly *partial* inference only;
+                # no inferred URL can become an independently proven resource.
+                errors['no_source_evidence']='visual inference only; OCR/ASR source observations absent'
+            else:
+                errors['all_passes']='no source observations or visual inference; media remains pending'
         saved['status']='partial' if errors else 'evidence_saved'
         self.store.con.execute('UPDATE sources SET status=? WHERE id=? AND tenant=?',
                                (saved['status'],saved['source_id'],tenant))
-        if original_evidence:
+        if original_evidence or model_only_evidence:
             sha=hashlib.sha256()
-            with media.open('rb') as stream:
-                for chunk in iter(lambda:stream.read(1024*1024),b''):
-                    sha.update(chunk)
+            for asset in media_assets:
+                with asset.open('rb') as stream:
+                    for chunk in iter(lambda:stream.read(1024*1024),b''):
+                        sha.update(chunk)
             link_id=pipe.ingest_url(source,tenant)['source_id']
-            receipt=self.store.mark_media_processed(tenant,link_id,saved['source_id'],sha.hexdigest(),partial=bool(errors))
+            receipt=self.store.mark_media_processed(
+                tenant,link_id,saved['source_id'],sha.hexdigest(),
+                partial=bool(errors),
+                model_only_partial=bool(model_only_evidence and not original_evidence))
             saved['processing_receipt_id']=receipt
         saved.update({'stage_errors':errors,'stage_timings_ms':measurements,'stage_observations':{**{k:len(v) for k,v in results.items()},'provided':len(extra)},'external_calls':external_count,'media_is_local':True,
-                      'knowledge_completeness':'NOT_AUDITED',
+                      'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),
                       'unattempted_modalities':([stage for stage,active in (('asr',self.audio_model is not None),('video_model',self.video_model is not None),('structured_fact_model',self.fact_model is not None)) if not active])})
         return saved

@@ -62,7 +62,7 @@ def pg_open(db_url:str):
 
 def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->dict:
     from tempfile import TemporaryDirectory
-    from .public_media import acquire_public_reel
+    from .public_bundle import acquire_public_bundle
     with TemporaryDirectory(prefix='rb_reel_worker_') as d:
         db=KnowledgeStore(Path(d)/'isolated_evidence.sqlite')
         try:
@@ -70,16 +70,35 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                 asr=None;vlm=None
                 if flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'):
                     if os.getenv('GROQ_API_KEY'):
-                        asr=GroqSpeechToText(ProviderOptions(os.environ['GROQ_API_KEY'],os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),'https://api.groq.com'))
-                    if os.getenv('GEMINI_API_KEY'):
-                        vlm=GeminiVideoResearcher(os.environ['GEMINI_API_KEY'],os.getenv('GEMINI_VIDEO_MODEL',''))
+                        asr=GroqSpeechToText(ProviderOptions(
+                            os.environ['GROQ_API_KEY'],
+                            os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
+                            'https://api.groq.com'))
+                    if os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
+                        from .qwen_vl import QwenVLResearcher
+                        vlm=QwenVLResearcher(
+                            os.environ['REELBRAIN_QWEN_VL_BASE_URL'],
+                            model=os.getenv('REELBRAIN_QWEN_VL_MODEL','Qwen/Qwen3-VL-8B-Instruct'),
+                            api_key=os.getenv('REELBRAIN_QWEN_VL_API_KEY',''))
+                    elif os.getenv('GEMINI_API_KEY'):
+                        vlm=GeminiVideoResearcher(
+                            os.environ['GEMINI_API_KEY'],
+                            os.getenv('GEMINI_VIDEO_MODEL',''))
+                if asr is None and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
+                    # Local Whisper executes fully on CPU, without any API upload.
+                    from .local_asr import FasterWhisperSpeechToText
+                    asr=FasterWhisperSpeechToText(
+                        os.getenv('REELBRAIN_LOCAL_ASR_MODEL','small'))
                 return LocalPipelineEngine(store,audio_model=asr,video_model=vlm)
             if acquisition=='yt_dlp_public':
-                # No cookie/login bypass; official source URL only; real bounded MP4 required.
-                media=acquire_public_reel(source_url,Path(d))
-                result=engine_factory(db).ingest(media,source_url,allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
+                # Public-only: yt-dlp then gallery-dl fallback, or full photo
+                # carousel. Every page must pass media-byte validation.
+                bundle=acquire_public_bundle(source_url,Path(d))
+                result=engine_factory(db).ingest(
+                    list(bundle.paths),source_url,
+                    allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
                 result={**result,'media_processed':bool(result.get('processing_receipt_id')),
-                        'provider':'yt-dlp-public','media_deleted_after_processing':True}
+                        'provider':bundle.provider,'media_deleted_after_processing':True}
             elif acquisition=='apify':
                 result=process_instagram_link(db,source_url,
                     options=LinkProcessingOptions(allow_paid=True,allow_external=True,rights_confirmed=True),
