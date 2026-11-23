@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from .store import KnowledgeStore
 from .sources import canonicalize_instagram
+from .media_evidence_summary import build_media_summary
 
 class RemoteWriteError(RuntimeError):pass
 
@@ -47,5 +48,33 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
                 cur.execute('''insert into reelbrain_research.reel_resources(source_url,canonical_resource_url,resource_name,claimed_purpose,observation_id)
                    values(%s,%s,%s,%s,%s) on conflict do nothing''',
                    (canonical,r['canonical_url'],r['name'],r['purpose'],r['evidence_id']))
+            # Project each real observation into the searchable evidence row without
+            # changing the independently researched public metadata/caption.
+            # Keep inference separate: a VLM's assertion is NOT verified video proof.
+            summary=build_media_summary([dict(ev) for ev in observations],result)
+            source_trace={'kind':'authorized_media_processing',
+                          'source_id':source_id,'provider':result.get('provider','unknown'),
+                          'modality_audit':'NOT_AUDITED','external_claims_verified':False}
+            cur.execute('''insert into public.reelbrain_reel_knowledge
+                (source_url,source_provider,verified_reel_content,content_evidence,
+                 video_analyzed,audio_transcribed,ocr_analyzed,processing_stage)
+                values(%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s)
+                on conflict(source_url) do update set
+                  verified_reel_content=public.reelbrain_reel_knowledge.verified_reel_content ||
+                    excluded.verified_reel_content,
+                  content_evidence=case
+                    when public.reelbrain_reel_knowledge.content_evidence @> excluded.content_evidence
+                    then public.reelbrain_reel_knowledge.content_evidence
+                    else public.reelbrain_reel_knowledge.content_evidence || excluded.content_evidence end,
+                  video_analyzed=public.reelbrain_reel_knowledge.video_analyzed or excluded.video_analyzed,
+                  audio_transcribed=public.reelbrain_reel_knowledge.audio_transcribed or excluded.audio_transcribed,
+                  ocr_analyzed=public.reelbrain_reel_knowledge.ocr_analyzed or excluded.ocr_analyzed,
+                  processing_stage=excluded.processing_stage,
+                  updated_at=now()''',
+                (canonical,str(result.get('provider') or 'reelbrain-media-worker')[:100],
+                 json.dumps(summary['content'],ensure_ascii=False),
+                 json.dumps([source_trace],ensure_ascii=False),
+                 summary['video_analyzed'],summary['audio_transcribed'],
+                 summary['ocr_analyzed'],summary['processing_stage']))
     return {'source_url':canonical,'source_id':source_id,'observation_count':len(observations),
             'resource_citations':len(resources),'status':status,'persisted_in_postgres':True}
