@@ -162,6 +162,28 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Start private ephemeral open-source Cobalt
+        id: cobalt
+        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' && vars.REELBRAIN_COBALT_ENABLED != '0' }}
+        shell: bash
+        run: |
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          if ! docker run --rm -d --name reelbrain-cobalt-worker \
+              --cap-drop ALL --security-opt no-new-privileges --memory 1g \
+              -p 127.0.0.1:9000:9000 -e API_URL=http://127.0.0.1:9000/ \
+              ghcr.io/imputnet/cobalt:11.7.1-a636575@sha256:df14a3b3fe4390d4e1c2d4761ed58981d34aa5fc82d0df2091bab890e7dfaa8b; then
+            echo "Cobalt startup unavailable; existing acquisition providers remain available."
+            exit 0
+          fi
+          for i in $(seq 1 25); do
+            if curl -fsS --max-time 2 http://127.0.0.1:9000/ >/dev/null; then
+              echo "ready=true" >> "$GITHUB_OUTPUT"
+              echo "Private Cobalt ready; no additional credentials."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Cobalt startup timed out; using existing acquisition providers."
       - name: Validate database connection before claiming a Reel
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         run: |
@@ -178,6 +200,8 @@ jobs:
           print('Dedicated worker DB connectivity verified; credentials not printed.')
           PY
       - name: Drain up to four eligible Reels within a bounded runner window
+        env:
+          REELBRAIN_COBALT_READY: ${{ steps.cobalt.outputs.ready || '0' }}
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         run: |
           python - <<'PY'
@@ -193,3 +217,7 @@ jobs:
           # Retry/defer ACK does NOT count as actual Reel extraction success.
           require_successful_batch(result)
           PY
+
+      - name: Remove private ephemeral Cobalt
+        if: always()
+        run: docker rm -f reelbrain-cobalt-worker >/dev/null 2>&1 || true
