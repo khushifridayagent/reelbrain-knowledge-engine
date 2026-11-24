@@ -21,7 +21,7 @@ def unavailable(reason):
 
 def cobalt_ready(url:str)->bool:
     canon=canonicalize_instagram(url)
-    return os.getenv('REELBRAIN_COBALT_READY')=='1' and ('/reel/' in canon or '/tv/' in canon)
+    return os.getenv('REELBRAIN_COBALT_READY','').strip().lower() in ('1','true') and ('/reel/' in canon or '/tv/' in canon)
 
 def validate_cobalt_response(data:dict)->str:
     if not isinstance(data,dict):
