@@ -1,9 +1,22 @@
-"""Bounded overlapping jobs, each owning its own database connection."""
-from concurrent.futures import ThreadPoolExecutor
+"""Three ordered stages per Reel, bounded overlap across Reels.
+One acquisition, one analysis and one persistence slot per runner.
+No raw media leaves the runner for checkpoint storage.
+"""
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from threading import Semaphore, local
+from contextlib import contextmanager
 import time
 
-def storage_allowed(size):
-    return 0 <= size < 280_000_000
+_context=local()
+
+@contextmanager
+def stage_slot(stage):
+    slots=getattr(_context,'slots',None)
+    if slots is None:
+        yield
+    else:
+        with slots[stage]:
+            yield
 
 def classify_model_http(code):
     if code in (402,429):return 'quota exceeded'
@@ -23,16 +36,31 @@ def drain_overlapping(config,*,max_jobs=4,process_batch=None,time_remaining=None
     if time_remaining is None:
         end=time.monotonic()+3000
         time_remaining=lambda:end-time.monotonic()
+    slots={stage:Semaphore(1) for stage in ('download','analysis','storage')}
+    def work():
+        _context.slots=slots
+        try:return process_batch(config,batch_size=1)
+        finally:del _context.slots
     outcomes=[]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        for i in range(0,max_jobs,2):
-            if time_remaining()<900:break
-            futures=[pool.submit(process_batch,config,batch_size=1) for _ in range(min(2,max_jobs-i))]
-            results=[f.result() for f in futures]
-            for batch in results:
+    started=0
+    exhausted=False
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        pending=set()
+        def fill():
+            nonlocal started
+            while not exhausted and len(pending)<3 and started<max_jobs and time_remaining()>=900:
+                pending.add(pool.submit(work))
+                started+=1
+        fill()
+        while pending:
+            finished,pending=wait(pending,return_when=FIRST_COMPLETED)
+            for f in finished:
+                batch=f.result()
+                if not isinstance(batch,list):raise RuntimeError('Invalid worker response')
+                if not batch:exhausted=True
                 for item in batch:
                     if item.get('status') in ('deferred_access','deferred_model_quota','retry_or_dead_letter') and not item.get('acknowledged_failure'):
                         raise RuntimeError('Unacknowledged durable failure')
                 outcomes.extend(batch)
-            if not any(results):break
+            fill()
     return outcomes
