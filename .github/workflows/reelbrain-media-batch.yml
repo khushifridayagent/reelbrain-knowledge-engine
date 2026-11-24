@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   # Kick off one execution as soon as this workflow update reaches main.
   push:
-    branches: [main]
+    branches: [main, fix/resumable-overlapping-media]
     paths:
       - '.github/workflows/reelbrain-media-batch.yml'
   schedule:
@@ -206,12 +206,13 @@ jobs:
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         run: |
           python - <<'PY'
+          import os
           from reelbrain.durable_worker import checked_config
           from reelbrain.resumable_media import drain_overlapping
           from reelbrain.batch_outcome import require_successful_batch
           # Three in-flight Reels; one slot per download, analysis and persistence stage.
           # All media is transient and observations go to dedicated Postgres.
-          result = drain_overlapping(checked_config(), max_jobs=4)
+          result = drain_overlapping(checked_config(), max_jobs=4 if os.environ.get('GITHUB_REF_NAME')=='main' else 3)
           print('Claimed jobs:', len(result))
           print('Outcomes:', [item['status'] for item in result])
           # Retry/defer ACK does NOT count as actual Reel extraction success.
