@@ -142,6 +142,14 @@ class LocalPipelineEngine:
                     results[stage]=raw
                     measurements[stage]=elapsed
                 except Exception as exc:
+                    # Keep completed visual batches when the shared Cloudflare
+                    # Neuron allocation runs out halfway through a Reel.
+                    if stage=='vlm':
+                        partial=getattr(exc,'partial_observations',None)
+                        if isinstance(partial,list) and all(
+                            isinstance(ev,Observation) and ev.kind=='model_inference'
+                            for ev in partial):
+                            results[stage]=partial[:120]
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
         if slide_failures:
             errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
