@@ -1,0 +1,98 @@
+
+name: Isolated Meta Reel attachment diagnostic
+on:
+  push:
+    branches: [diagnostics/meta-system-user-20261125]
+    paths: ['.github/workflows/reelbrain-system-user-attachment-diagnostic.yml']
+permissions:
+  contents: read
+jobs:
+  read-only-receipt-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare bounded read-only receipt sample
+        env:
+          DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+        run: |
+          python -m pip install --disable-pip-version-check 'psycopg[binary]>=3.2,<4'
+          python - <<'PY'
+          import json,os,sys
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          import psycopg
+          try:
+              u=urlsplit(os.environ['DB_URL'])
+              if 'xlkdzrhzizuftbnitodr' not in (u.username or '') and 'xlkdzrhzizuftbnitodr' not in (u.hostname or ''):raise ValueError()
+              with psycopg.connect(os.environ['DB_URL'],connect_timeout=8,options='-c default_transaction_read_only=on -c statement_timeout=5000') as pg:
+                  with pg.cursor() as cur:
+                      cur.execute("""select r.sender_igsid,r.message_id,r.status,
+                        coalesce(array_agg(l.source_url) filter(where l.source_url is not null),array[]::text[])
+                        from public.reelbrain_dm_receipts r join public.reelbrain_sender_candidates c on c.sender_id=r.sender_igsid and c.approved
+                        left join public.reelbrain_dm_receipt_links l on l.receipt_id=r.id
+                        where r.status in ('queued','needs_review')
+                        group by r.id,r.sender_igsid,r.message_id,r.status,r.first_received_at
+                        order by (r.status='queued') desc,r.first_received_at desc limit 12""")
+                      rows=cur.fetchall()
+              p=Path(os.environ['RUNNER_TEMP'])/'rb_attachment_candidates.json'
+              fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+              with os.fdopen(fd,'w') as f:json.dump(rows,f)
+              print('RB_ATTACHMENT '+json.dumps({'test':'sample','count':len(rows),'known_linked':sum(bool(r[3]) for r in rows)}))
+          except Exception:
+              print('RB_ATTACHMENT {"test":"sample","failed":true}');sys.exit(1)
+          PY
+      - name: Verify actual Reel attachments and canonical links without writes
+        env:
+          TEST_TOKEN: ${{ secrets.REELBRAIN_META_SYSTEM_USER_TEST_TOKEN }}
+          IG_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {resolvePageSession,reelEventsFromGraph,validGraphId,graphErrorCategory} from './supabase/functions/reelbrain-dm-reconciler/core.mjs';
+          const token=process.env.TEST_TOKEN,ig=process.env.IG_ID;
+          const file=process.env.RUNNER_TEMP+'/rb_attachment_candidates.json';
+          const rows=JSON.parse(fs.readFileSync(file,'utf8'));fs.unlinkSync(file);
+          const emit=(test,o)=>console.log('RB_ATTACHMENT '+JSON.stringify({test,...o}));
+          async function graph(path,params={},cred=token){
+            const url=new URL('https://graph.facebook.com/v26.0/'+path);
+            for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
+            const r=await fetch(url,{headers:{Authorization:'Bearer '+cred},redirect:'error',signal:AbortSignal.timeout(7000)});
+            const p=await r.json().catch(()=>null);
+            if(!r.ok||!p||p.error)throw new Error(graphErrorCategory(r.status,p));
+            return p;
+          }
+          let session;
+          try{session=await resolvePageSession(graph,token,ig);}catch{emit('session',{pass:false});process.exit(1)}
+          let attempted=0,details=0,attachmentReads=0,links=0,exactMatches=0,unresolved=0,failures=0,mismatches=0;
+          const errors={};
+          for(const [sender,id,status,expected] of rows){
+            if(!validGraphId(id))continue;
+            attempted++;
+            try{
+              const p=await graph(encodeURIComponent(id),{fields:'id,from,created_time,message,attachments'},session.token);
+              if(String(p.from?.id)!==String(sender)){mismatches++;continue}
+              details++;
+              const ev=reelEventsFromGraph([p],sender,ig);
+              for(const e of ev){
+                attachmentReads+=e.attachment_types.length;links+=e.urls.length;
+                if(e.urls.some(u=>expected.includes(u)))exactMatches++;
+                if(e.status==='needs_review')unresolved++;
+              }
+              if(exactMatches>=2&&attachmentReads>0)break;
+            }catch(e){
+              failures++;
+              const msg=String(e?.message||'');
+              const k=/^graph_http_[0-9]+(?:_code_[0-9]+)?(?:_sub_[0-9]+)?$/.test(msg)?msg:'network_or_other';
+              errors[k]=(errors[k]||0)+1;
+              if(/_code_(4|17|32|613)(?:_|$)/.test(k))break;
+            }
+            await new Promise(r=>setTimeout(r,550));
+          }
+          emit('actual_reel_receipts',{attempted,details,attachment_count:attachmentReads,canonical_links:links,exact_known_link_matches:exactMatches,unresolved,failures,sender_mismatches:mismatches,errors});
+          JS
