@@ -1,0 +1,183 @@
+
+name: Isolated Meta system user credential diagnostic
+on:
+  push:
+    branches: [diagnostics/meta-system-user-20261125]
+    paths: ['.github/workflows/reelbrain-system-user-diagnostic.yml']
+permissions:
+  contents: read
+jobs:
+  read-only-credential-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install diagnostic dependencies
+        run: python -m pip install --disable-pip-version-check 'httpx>=0.27,<1' 'psycopg[binary]>=3.2,<4'
+      - name: Bounded Meta media and token audit
+        env:
+          TEST_TOKEN: ${{ secrets.REELBRAIN_META_SYSTEM_USER_TEST_TOKEN }}
+          DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+          IG_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
+          APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          APP_ID: ${{ vars.REELBRAIN_META_APP_ID }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os,json,re,sys
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from urllib.parse import urlsplit
+          import httpx,psycopg
+          from reelbrain.meta_business_media import acquire_meta_bundle, MetaMediaUnavailable
+          from reelbrain.meta_graph_probe import check_meta_business_access
+          token=os.getenv('TEST_TOKEN','')
+          ig=os.getenv('IG_ID','')
+          def emit(test,**kw):print('RB_DIAG '+json.dumps(dict(test=test,**kw),sort_keys=True),flush=True)
+          if not token or not re.fullmatch(r'[0-9]{8,30}',ig):
+              emit('configuration',test_secret_present=bool(token),ig_configured=bool(ig));sys.exit(1)
+          emit('configuration',test_secret_present=True,ig_configured=True)
+          def graph(path,params,cred):
+              try:
+                  r=httpx.get('https://graph.facebook.com/v27.0/'+path,params=params,headers={'Authorization':'Bearer '+cred},timeout=15,follow_redirects=False)
+                  j=r.json()
+                  if r.status_code!=200 or not isinstance(j,dict) or j.get('error'):
+                      e=j.get('error',{}) if isinstance(j,dict) else {}
+                      return None,{'http':r.status_code,'code':e.get('code') if isinstance(e.get('code'),int) else None,'subcode':e.get('error_subcode') if isinstance(e.get('error_subcode'),int) else None}
+                  return j,{'http':200}
+              except Exception:return None,{'network_failure':True}
+          def expiry(d,k):
+              v=d.get(k)
+              return v if isinstance(v,int) and 0<=v<4102444800 else 'absent_or_unreadable'
+          scopes={'instagram_basic','instagram_manage_insights','instagram_manage_messages','pages_read_engagement','pages_show_list','pages_manage_metadata','pages_messaging','business_management','instagram_content_publish'}
+          def debug(t,label):
+              auth=(os.getenv('APP_ID')+'|'+os.getenv('APP_SECRET')) if os.getenv('APP_ID') and os.getenv('APP_SECRET') else token
+              data,status=graph('debug_token',{'input_token':t},auth)
+              d=data.get('data',{}) if data else {}
+              granted=set(x for x in d.get('scopes',[]) if isinstance(x,str))
+              granular=d.get('granular_scopes',[])
+              emit(label,**status,valid=d.get('is_valid') if isinstance(d.get('is_valid'),bool) else None,
+                   token_type=d.get('type') if d.get('type') in ('USER','PAGE','SYSTEM_USER','APP') else 'unknown',
+                   app_matches_reel=str(d.get('application','')).lower()=='reel' if d else None,
+                   app_id=d.get('app_id') if re.fullmatch(r'[0-9]{5,32}',str(d.get('app_id',''))) else None,
+                   expires_at=expiry(d,'expires_at'),data_access_expires_at=expiry(d,'data_access_expires_at'),
+                   granted_scopes=sorted(granted & scopes),other_scope_count=len(granted-scopes),
+                   granular_scope_count=len(granular) if isinstance(granular,list) else 0,
+                   granular_targets=[{'scope':g.get('scope'),'target_count':len(g.get('target_ids') or []),'includes_configured_ig':ig in [str(x) for x in (g.get('target_ids') or [])]} for g in granular if isinstance(g,dict) and g.get('scope') in scopes] if isinstance(granular,list) else [],
+                   app_auth_configured=bool(os.getenv('APP_ID') and os.getenv('APP_SECRET')))
+          debug(token,'system_debug')
+          me,status=graph('me',{'fields':'id'},token)
+          emit('system_identity',**status,identity_present=bool(me and me.get('id')))
+          account,status=graph(ig,{'fields':'id,username'},token)
+          emit('ig_identity',**status,configured_id_matches=bool(account and str(account.get('id'))==ig),username_matches=bool(account and str(account.get('username','')).lower()=='khushibby85'))
+          pages,status=graph('me/accounts',{'fields':'id,name,instagram_business_account{id},access_token,tasks','limit':100},token)
+          matches=[p for p in (pages or {}).get('data',[]) if isinstance(p,dict) and str((p.get('instagram_business_account') or {}).get('id'))==ig and str(p.get('name','')).lower()=='reelcategory']
+          page=matches[0] if len(matches)==1 else {}
+          emit('page_derivation',**status,matching_page_count=len(matches),derived_token_present=bool(page.get('access_token')),messaging_task='MESSAGING' in (page.get('tasks') or []),pagination_remaining=bool((pages or {}).get('paging',{}).get('next')))
+          if page.get('access_token'):
+              debug(page['access_token'],'derived_page_debug')
+          # Only bounded read-only SQL; no locks, queue claims or writes.
+          try:
+              uri=os.environ['DB_URL'];u=urlsplit(uri)
+              if 'xlkdzrhzizuftbnitodr' not in (u.username or '') and 'xlkdzrhzizuftbnitodr' not in (u.hostname or ''):raise ValueError()
+              with psycopg.connect(uri,connect_timeout=8,options='-c default_transaction_read_only=on -c statement_timeout=5000') as pg:
+                  with pg.cursor() as cur:
+                      cur.execute("select sender_id from public.reelbrain_sender_candidates where approved=true order by sender_id limit 4")
+                      senders=[str(x[0]) for x in cur.fetchall()]
+                      cur.execute("select j.id,j.source_url,k.creator_handle from public.reelbrain_dm_jobs j join public.reelbrain_reel_knowledge k using(source_url) where k.creator_handle is not null order by (j.id=9) desc,j.id desc limit 3")
+                      rows=cur.fetchall()
+              emit('read_only_db',approved_senders=len(senders),media_candidates=len(rows))
+          except Exception:
+              emit('read_only_db',failed=True);sys.exit(1)
+          # Temporary file lives only within this runner, contains approved IDs only.
+          # No credentials, private messages or artifacts are persisted.
+          p=Path(os.environ['RUNNER_TEMP'])/'rb_diag_senders.json'
+          fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+          with os.fdopen(fd,'w') as f:json.dump(senders,f)
+          for jid,url,creator in rows:
+              try:
+                  auth=check_meta_business_access(token,ig,'1',creator=creator,shortcode=url.rstrip('/').rsplit('/',1)[-1])
+                  emit('media_metadata',job=int(jid),status=auth.get('status'),account_id_valid=auth.get('account_id_valid'),matched_media=auth.get('matched_media'),original_urls=auth.get('original_urls'))
+                  with TemporaryDirectory() as td:
+                      bundle=acquire_meta_bundle(url,creator,token,ig,Path(td),max_total_bytes=60*1024*1024)
+                      emit('media_bytes',job=int(jid),passed=True,assets=len(bundle.paths),bytes=sum(x.stat().st_size for x in bundle.paths))
+                      break
+              except MetaMediaUnavailable as exc:
+                  # Only predefined categories; never print exceptions or payloads.
+                  tags=('original_media_url_omitted','token_expired_or_invalid','insufficient_graph_permissions','rate_limited','target Reel not in business discovery results','over size budget','invalid media bytes')
+                  emit('media_bytes',job=int(jid),passed=False,category=next((x for x in tags if x in str(exc)),'other_media_unavailable'))
+              except Exception:emit('media_bytes',job=int(jid),passed=False,category='diagnostic_error')
+          PY
+      - name: Read-only DM endpoint and production parser diagnostic
+        env:
+          TEST_TOKEN: ${{ secrets.REELBRAIN_META_SYSTEM_USER_TEST_TOKEN }}
+          IG_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {resolvePageSession,listApprovedConversations,inspectParticipantIds,reelEventsFromGraph,validGraphId,graphErrorCategory} from './supabase/functions/reelbrain-dm-reconciler/core.mjs';
+          const token=process.env.TEST_TOKEN,ig=process.env.IG_ID;
+          const emit=(test,fields)=>console.log('RB_DIAG '+JSON.stringify({test,...fields}));
+          const file=process.env.RUNNER_TEMP+'/rb_diag_senders.json';
+          const senders=JSON.parse(fs.readFileSync(file,'utf8'));fs.unlinkSync(file);
+          if(senders.length!==3){emit('dm_configuration',{approved_count:senders.length});process.exit(1)}
+          const safe=e=>/^(?:(?:identity_page|identity_accounts|conversation_list)_)?graph_http_[0-9]+(?:_code_[0-9]+)?(?:_sub_[0-9]+)?$/.test(String(e?.message))?e.message:'unavailable';
+          async function graph(path,params={},cred=token){
+            const url=new URL('https://graph.facebook.com/v26.0/'+path);
+            for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
+            const res=await fetch(url,{headers:{Authorization:'Bearer '+cred},redirect:'error',signal:AbortSignal.timeout(7000)});
+            const p=await res.json().catch(()=>null);
+            if(!res.ok||!p||p.error)throw new Error(graphErrorCategory(res.status,p));
+            return p;
+          }
+          let session;
+          try{session=await resolvePageSession(graph,token,ig);emit('production_session',{pass:true,mode:session.mode});}catch(e){emit('production_session',{pass:false,error:safe(e)});}
+          // Resolve the exact Page once for testing raw direct credential independently.
+          if(!session){
+            try{
+              const p=await graph('me/accounts',{fields:'id,name,instagram_business_account{id},access_token',limit:'100'});
+              const matches=(p.data||[]).filter(x=>String(x.instagram_business_account?.id)===ig&&String(x.name).toLowerCase()==='reelcategory');
+              if(matches.length===1)session={id:String(matches[0].id),token:matches[0].access_token,mode:'diagnostic_derived'};
+            }catch(e){emit('diagnostic_page_resolution',{pass:false,error:safe(e)});}
+          }
+          if(!session){emit('dm_tests',{blocked:true});process.exit(0)}
+          async function audit(mode,credential){
+            for(let i=0;i<senders.length;i++){
+              let conversations=0,matching=0,messageList=false,details=0,links=0,attachments=0,missing=0,detailErrors=0;
+              try{
+                const sender=senders[i];
+                const list=await listApprovedConversations(graph,{id:session.id,token:credential},sender);
+                conversations=(list.data||[]).length;
+                for(const t of (list.data||[]).slice(0,15)){
+                  if(!validGraphId(String(t.id)))continue;
+                  const tid=encodeURIComponent(t.id);
+                  const d=await graph(tid,{fields:'participants,updated_time'},credential).catch(()=>null);
+                  if(!d||d.participants?.data?.length!==2||!inspectParticipantIds(d.participants,sender,ig))continue;
+                  matching++;
+                  const m=await graph(tid+'/messages',{limit:'20'},credential);
+                  messageList=true;
+                  for(const item of (m.data||[]).slice(0,8)){
+                    if(!validGraphId(String(item.id)))continue;
+                    try{
+                      const v=await graph(encodeURIComponent(item.id),{fields:'id,from,created_time,message,attachments'},credential);
+                      if(String(v.from?.id)!==sender)continue;
+                      details++;
+                      const ev=reelEventsFromGraph([v],sender,ig);
+                      for(const e of ev){links+=e.urls.length;attachments+=e.attachment_types.length;if(e.status==='needs_review')missing++;}
+                    }catch(e){detailErrors++;}
+                  }
+                  break;
+                }
+                emit('dm_sender',{mode,sender_index:i+1,conversation_api:true,matching_threads:matching,message_list:messageList,inbound_details:details,attachment_count:attachments,canonical_links:links,unresolved:missing,detail_errors:detailErrors});
+              }catch(e){emit('dm_sender',{mode,sender_index:i+1,conversation_api:false,error:safe(e),matching_threads:matching,message_list:messageList,inbound_details:details,canonical_links:links});}
+            }
+          }
+          await audit('raw_system',token);
+          if(session.token&&session.token!==token)await audit('derived_page',session.token);
+          JS
