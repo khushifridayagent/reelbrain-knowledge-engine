@@ -148,10 +148,10 @@ def _finalize(pg,url:str,transcript:dict|None,error_category:str|None=None)->boo
                       content_evidence=coalesce(content_evidence,'[]'::jsonb) ||
                         jsonb_build_array(jsonb_build_object(
                           'kind','third_party_url_audio_transcription',
-                          'provider',%s,
+                          'provider',%s::text,
                           'is_first_party_media_evidence',false,
                           'visual_frames_analyzed',false,
-                          'source_url',%s)),
+                          'source_url',%s::text)),
                       updated_at=now()
                     WHERE source_url=%s AND NOT
                       (coalesce(verified_reel_content,'{}'::jsonb) ? 'provider_audio_transcript')
