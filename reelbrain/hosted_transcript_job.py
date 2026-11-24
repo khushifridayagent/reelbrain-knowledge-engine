@@ -32,7 +32,7 @@ def _reserve_one(pg):
                    AND j.status IN ('queued','partial')
                    AND NOT (coalesce(k.verified_reel_content,'{}'::jsonb) ? 'provider_audio_transcript')
                    AND (a.source_url IS NULL OR (a.attempts < 3 AND a.next_attempt_at <= now()))
-                 ORDER BY k.created_at,k.source_url LIMIT 1
+                 ORDER BY j.created_at,j.id LIMIT 1
             """)
             hit=cur.fetchone()
             if not hit:return None
