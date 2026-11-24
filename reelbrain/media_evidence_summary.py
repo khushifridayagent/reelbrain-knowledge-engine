@@ -41,11 +41,17 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
     # verification. Separate source_observations and model_inferences below.
     vlm_succeeded = media_processed and int(counts.get('vlm') or 0)>0 and 'vlm' not in errors
     video_analyzed = (ocr_succeeded and int(counts.get('ocr') or 0) > 0) or vlm_succeeded
+    from .resumable_media import required_incomplete_stages
+    hosted_audio = result.get('hosted_audio_reused') in ('transcriptfetch','scrapecreators')
+    audio_ready = not result.get('audio_required',True) or hosted_audio or (asr_succeeded and int(counts.get('asr') or 0)>0)
+    complete = (media_processed and result.get('status')=='evidence_saved' and
+                not required_incomplete_stages(result) and ocr_succeeded and vlm_succeeded and
+                audio_ready and bool(observations))
     return {
         'video_analyzed': video_analyzed,
         'audio_transcribed': asr_succeeded and int(counts.get('asr') or 0) > 0,
         'ocr_analyzed': ocr_succeeded,
-        'processing_stage': 'partial_media' if media_processed else 'media_pending',
+        'processing_stage': 'completed' if complete else ('partial_media' if media_processed else 'media_pending'),
         'content': {
             'media_accessed': media_processed,
             'hosted_audio_reused': result.get('hosted_audio_reused') if result.get('hosted_audio_reused') in ('transcriptfetch','scrapecreators') else None,
