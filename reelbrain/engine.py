@@ -168,7 +168,7 @@ class LocalPipelineEngine:
                 measurements['fact_enrichment']=int((time.monotonic()-start)*1000)
             except Exception as exc:
                 errors['fact_enrichment']=f'{type(exc).__name__}: {exc}'[:250]
-        original_evidence=any(ev.kind in {'ocr','asr','caption','manual','verified_doc'}
+        original_evidence=any(ev.kind in {'ocr','qr','asr','caption','manual','verified_doc'}
                               and ev.text.strip() for ev in observations)
         model_only_evidence=any(ev.kind=='model_inference' and ev.text.strip()
                                 for ev in observations)
