@@ -25,11 +25,16 @@ def adaptive_local_ocr(path:Path)->list[Observation]:
     if path.suffix.lower() not in {'.mp4','.mov','.avi','.mkv','.webm'}:
         return recognize_image(path)
     from . import keyframes
+    from .qr_evidence import scan_video_qr
     result=[]
     for event in keyframes.analyse(str(path)):
         if not event.text.strip():continue
         minutes,seconds=divmod(float(event.t),60)
         result.append(Observation(event.text,kind='ocr',locator=f'{int(minutes):02}:{seconds:05.2f}',confidence=max(0,min(float(event.conf),100))/100))
+    qr_evidence,coverage=scan_video_qr(path)
+    # Scanning beyond the bounded video window never fabricates full coverage.
+    # Ordinary OCR evidence remains intact even when there is no QR.
+    result.extend(qr_evidence)
     return result
 
 
