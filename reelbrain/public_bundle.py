@@ -131,6 +131,9 @@ def acquire_public_bundle(
         raise PublicBundleError('Carousel exceeds supported slide count; incomplete extraction refused')
     if any(not _valid_asset(p) for p in paths):
         raise PublicBundleError('Gallery contains unverified or unsupported media bytes')
+    if ('/reel/' in canonical or '/tv/' in canonical) and not any(
+            p.suffix.lower() in ('.mp4','.m4v','.mov') for p in paths):
+        raise PublicBundleError('Public media unavailable: reel_original_video_missing')
     if sum(p.stat().st_size for p in paths) > max_total_bytes:
         raise PublicBundleError('Media bundle exceeds bounded total size')
     return PublicBundle(tuple(paths), 'gallery-dl-public')

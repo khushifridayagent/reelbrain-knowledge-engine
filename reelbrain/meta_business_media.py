@@ -84,6 +84,9 @@ class MetaBusinessDiscovery:
                 payload=response.json()
                 if not isinstance(payload,dict):
                     raise MetaMediaUnavailable('Public media unavailable: malformed Meta Graph reply')
+                if response.status_code>=400 and 'error' not in payload:
+                    category='rate_limited' if response.status_code==429 else 'http_failure'
+                    raise MetaMediaUnavailable('Public media unavailable: Meta Graph '+category)
                 return payload
             except MetaMediaUnavailable:raise
             except Exception:
@@ -98,13 +101,17 @@ class MetaBusinessDiscovery:
             from .meta_graph_probe import choose_linked_professional_ig_id
             pages=read_graph('/me/accounts',{
                 'fields':'id,instagram_business_account{id}','limit':25})
+            if 'error' in pages:
+                from .meta_graph_probe import classify_graph_failure
+                raise MetaMediaUnavailable('Public media unavailable: Meta Graph '+classify_graph_failure(pages))
             selected=choose_linked_professional_ig_id(pages,self.own_id)
             if not selected:
                 raise MetaMediaUnavailable(
                     'Public media unavailable: linked professional Instagram account missing or ambiguous')
             payload=read_graph('/'+selected,{'fields':fields})
-        if not isinstance(payload,dict) or 'error' in payload:
-            raise MetaMediaUnavailable('Public media unavailable: Meta Graph permission/response failure')
+        if 'error' in payload:
+            from .meta_graph_probe import classify_graph_failure
+            raise MetaMediaUnavailable('Public media unavailable: Meta Graph '+classify_graph_failure(payload))
         profile=payload.get('business_discovery') or {}
         if not isinstance(profile,dict) or str(profile.get('username','')).lower()!=creator.lower():
             raise MetaMediaUnavailable('Public media unavailable: creator account not accessible')
@@ -122,6 +129,11 @@ class MetaBusinessDiscovery:
         if len(matched)!=1:
             raise MetaMediaUnavailable('Public media unavailable: target Reel not in business discovery results')
         record=matched[0]
+        if ('/reel/' in canonical or '/tv/' in canonical) and record.get('media_type')!='VIDEO':
+            raise MetaMediaUnavailable('Public media unavailable: reel_original_video_missing')
+        if record.get('media_type')=='CAROUSEL_ALBUM' and isinstance(record.get('children'),dict):
+            if (record['children'].get('paging') or {}).get('next'):
+                raise MetaMediaUnavailable('Public media unavailable: incomplete carousel pagination')
         entries=record.get('children',{}).get('data') if record.get('media_type')=='CAROUSEL_ALBUM' and isinstance(record.get('children'),dict) else [record]
         if (not isinstance(entries,list) or not 1<=len(entries)<=20):
             raise MetaMediaUnavailable('Public media unavailable: complete carousel pages not returned')
@@ -130,10 +142,12 @@ class MetaBusinessDiscovery:
             if not isinstance(child,dict):raise MetaMediaUnavailable('Public media unavailable: malformed media child')
             kind=child.get('media_type')
             media_url=child.get('media_url')
-            if kind not in ('VIDEO','IMAGE') or not valid_meta_media_url(media_url):
-                # Meta deliberately omits media_url on licensed-audio /
-                # download-disabled Reels. Never substitute the cover frame.
-                raise MetaMediaUnavailable('Public media unavailable: Meta restricted original video/photo URL')
+            if kind not in ('VIDEO','IMAGE'):
+                raise MetaMediaUnavailable('Public media unavailable: unsupported_media_type')
+            if not media_url:
+                raise MetaMediaUnavailable('Public media unavailable: original_media_url_omitted')
+            if not valid_meta_media_url(media_url):
+                raise MetaMediaUnavailable('Public media unavailable: untrusted_media_url')
             assets.append(MetaSourceAsset(kind,media_url))
         return tuple(assets)
 
@@ -151,7 +165,7 @@ def acquire_meta_bundle(
     assets=MetaBusinessDiscovery(token,own_ig_user_id,http=lookup_http).find(url,creator_username)
     import httpx
     http=download_http or httpx.Client(follow_redirects=False,trust_env=False,timeout=55)
-    paths=[];total=0
+    paths=[];created=[];total=0
     try:
         for i,asset in enumerate(assets,1):
             path=root/f'page_{i:02}.{"mp4" if asset.media_type=="VIDEO" else "jpg"}'
@@ -165,6 +179,7 @@ def acquire_meta_bundle(
                     if header_len.isdigit() and int(header_len)+total>max_total_bytes:
                         raise MetaMediaUnavailable('Public media unavailable: Meta source over size budget')
                     with path.open('xb') as out:
+                        created.append(path)
                         for chunk in response.iter_bytes(chunk_size=1<<20):
                             total+=len(chunk)
                             if total>max_total_bytes:
@@ -179,7 +194,7 @@ def acquire_meta_bundle(
             paths.append(path)
         return PublicBundle(tuple(paths),'meta-business-discovery-official')
     except BaseException:
-        for p in paths:p.unlink(missing_ok=True)
+        for p in created:p.unlink(missing_ok=True)
         raise
     finally:
         # Only our own client should be closed; caller may share injected fake.
