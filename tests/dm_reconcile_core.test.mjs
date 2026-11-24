@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reelEventsFromGraph, inspectParticipantIds, linkedPageId, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations} from '../supabase/functions/reelbrain-dm-reconciler/core.mjs';
+import {reelEventsFromGraph, inspectParticipantIds, linkedPageId, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations, buildReceiptRecheck} from '../supabase/functions/reelbrain-dm-reconciler/core.mjs';
 const sender='12345001',business='12345002';
 test('Graph Reel attachment becomes a safe canonical receipt',()=>{
  const input=[{id:'mid.REEL1',from:{id:sender},created_time:'2026-11-23T21:23:00+0000',message:'',attachments:{data:[{type:'ig_reel',payload:{url:'https://www.instagram.com/reel/DaQLc80PIBU/?igsh=abc'}}]}}];
@@ -68,4 +68,19 @@ test('unsupported filtered query falls back to same Page with no alternate accou
   assert.equal(params.user_id,undefined);return {data:[{id:'t_example'}]};
  },session,sender);
  assert.equal(n,2);assert.equal(result.data[0].id,'t_example');
+});
+
+test('previous unresolved messages are eligible for bounded rechecks but linked messages stay deduped',()=>{
+ const state=buildReceiptRecheck([{message_id:'mid.linked',status:'queued'},{message_id:'mid.plain',status:'no_reel_link'},{message_id:'mid.review1',status:'needs_review'},{message_id:'mid.review2',status:'needs_review'},{message_id:'mid.review3',status:'needs_review'}],2);
+ assert.equal(state.take('mid.linked'),false);
+ assert.equal(state.take('mid.plain'),false);
+ assert.equal(state.take('mid.new'),true);
+ assert.equal(state.take('mid.new'),false);
+ assert.equal(state.take('mid.review1'),true);
+ assert.equal(state.take('mid.review2'),true);
+ assert.equal(state.take('mid.review3'),false);
+});
+test('plain text is not a missing Reel receipt',()=>{
+ const v=reelEventsFromGraph([{id:'mid.plain',from:{id:sender},message:'Hello'}],sender,business);
+ assert.equal(v[0].status,'no_reel_link');
 });
