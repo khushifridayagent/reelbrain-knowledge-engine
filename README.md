@@ -1,5 +1,31 @@
 # Reelbrain Knowledge Engine
 
+## 2026-11-24 — Cloudflare token confirmed; URL-first ASR and hosted vision adapters
+
+**Cloudflare**: The dedicated `reelbrain-resilience-clock` Worker now has a
+private `GITHUB_TOKEN` secret and its half-hour Cron Trigger is deployed.
+The original Worker uses `workflow_dispatch` (not
+`repository_dispatch`), so **do not follow the differently named token
+or workflow path proposed in the uploaded third-party research report**.
+A secret being present is not proof of successful GitHub dispatch: verify an
+actual GitHub Actions run with event `workflow_dispatch`.
+
+**Backend changes**: the optional TranscriptFetch v2 provider handles
+`POST /api/v2/transcripts/video` for URL-first *spoken audio* extraction,
+with 200 completion or 202 persisted `asr_...` job, free polling, exact
+shortcode checks, and separately stored/labelled third-party transcripts.
+The existing ScrapeCreators provider is unchanged and can still be selected.
+An opt-in Cloudflare Workers AI hosted
+`@cf/qwen/qwen3.8-27b` visual backend now connects to the existing frame
+sampler with the official OpenAI-compatible Cloudflare API URL. No model
+bytes or secrets are committed. These adapters are **OFF by default** and
+will not contact providers unless owner-managed API tokens and explicit
+GitHub Actions variables are set. This is not an Instagram media access fix.
+
+**See [Provider setup and operations](docs/TRANSCRIPT_PROVIDER_DEPLOYMENT_2026_11.md).**
+Six original Reels are still pending true media/OCR/ASR verification.
+No frontend, paid provider or unapproved storage integration is deployed.
+
 ## 2026-11-24 — free GPU and 2–6 month unattended research
 
 **Read first:** [Free GPU / hands-off architecture audit](docs/FREE_GPU_AND_HANDS_OFF_RESEARCH_2026_11.md), [One-shot TinyFish brief](docs/TINYFISH_ONE_SHOT_AUDIT_PROMPT.md).
