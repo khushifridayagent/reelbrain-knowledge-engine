@@ -84,7 +84,14 @@ def acquire_scrapecreators_bundle(url,output_directory,api_key,*,http=None):
         if http is None:client.close()
 
 def acquire_with_public_provider(url,output_directory,pg,*,cookies_file=None):
-    """Existing path stays primary; optional fallback costs at most one post call."""
+    """Prefer verified ephemeral Cobalt for Reels, retain existing fallbacks."""
+    from .cobalt_media import cobalt_ready,acquire_cobalt_reel
+    if cobalt_ready(url):
+        try:
+            return acquire_cobalt_reel(url,output_directory)
+        except PublicMediaError as exc:
+            # Never log raw source URLs or provider responses.
+            print("Cobalt acquisition deferred:",str(exc))
     from .meta_business_media import acquire_with_meta_fallback
     try:
         return acquire_with_meta_fallback(url,output_directory,pg,cookies_file=cookies_file)
