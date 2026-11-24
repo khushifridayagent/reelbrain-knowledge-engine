@@ -67,7 +67,7 @@ def _category(stderr: str) -> str:
 def acquire_public_bundle(
     url: str, output_directory: str | Path, *, max_items: int = 20,
     max_total_bytes: int = 300 * 1024 * 1024, timeout_seconds: int = 180,
-    yt_runner=None, gallery_runner=None,
+    yt_runner=None, gallery_runner=None, cookies_file: Path | None = None,
 ) -> PublicBundle:
     """Download up to 20 ordered post assets; fail if coverage is uncertain.
 
@@ -82,13 +82,17 @@ def acquire_public_bundle(
     root = Path(output_directory)
     if root.is_symlink() or not root.is_dir():
         raise PublicBundleError('Output directory must be an existing safe directory')
+    if cookies_file is not None:
+        cookie = Path(cookies_file)
+        if cookie.is_symlink() or not cookie.is_file() or (cookie.stat().st_mode & 0o077):
+            raise PublicBundleError('Session file missing or insufficiently private')
     reel_problem = ''
     if '/reel/' in canonical or '/tv/' in canonical:
         folder = root / 'yt'
         folder.mkdir(mode=0o700)
         try:
             path = acquire_public_reel(canonical, folder, timeout_seconds=timeout_seconds,
-                                       runner=yt_runner)
+                                       runner=yt_runner, cookies_file=cookies_file)
             if not _valid_asset(path):
                 raise PublicBundleError('No valid Reel video received from yt-dlp')
             return PublicBundle((path,), 'yt-dlp-public')
@@ -102,6 +106,8 @@ def acquire_public_bundle(
         '--http-timeout', '20', '--filesize-max', '100M',
         '--range', f'1-{max_items + 1}', '-D', str(folder), canonical,
     ]
+    if cookies_file is not None:
+        argv[1:1] = ['--cookies', str(cookies_file)]
     try:
         proc = (gallery_runner or subprocess.run)(
             argv, capture_output=True, text=True, stdin=subprocess.DEVNULL,
