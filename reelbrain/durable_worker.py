@@ -110,7 +110,7 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                         cf_vision['base_url'],
                         model=cf_vision['model'],
                         api_key=cf_vision['api_key'],
-                        max_frames=8)
+                        max_frames=4,max_batches=8)
                 elif generic_external_allowed and os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
                     from .qwen_vl import QwenVLResearcher
                     vlm=QwenVLResearcher(
