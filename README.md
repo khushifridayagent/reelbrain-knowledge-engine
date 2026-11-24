@@ -1,5 +1,65 @@
 # Reelbrain Knowledge Engine
 
+### REAL META GRAPH DIAGNOSTIC — 2026-11-24 (prioritize this over older setup notes)
+
+The owner **has already configured** GitHub Secret `REELBRAIN_META_GRAPH_TOKEN`
+and repository variables `REELBRAIN_META_IG_USER_ID` and
+`REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED=1`. They do **not** need to
+repeat those steps. A real GitHub Actions canary tested the protected token
+without logging its value:
+
+- **Meta Graph User Token currently valid** (`GET /me` success).
+- Configured numeric ID rejected on `GET /{id}?fields=id,username`
+  with Graph **code 100**: likely an App/Page ID rather than an accessible
+  Professional IG user ID, but code 100 alone cannot prove which.
+- Official `GET /me/accounts` returned **0 accessible Facebook Pages**
+  and **0 linked Instagram Professional account IDs**. Safe self-resolution
+  from a single linked Page could therefore not run.
+- Actual token scopes (safe boolean audit):
+  `instagram_basic=YES`, `pages_show_list=YES`,
+  `pages_read_engagement=YES`,
+  **`instagram_manage_insights=NO`**.
+- These requirements are external Meta account permissions/linkage.
+  Replacing OCR/Qwen models, changing the GitHub scheduler, or saving
+  an expired short-lived token in GitHub cannot grant them automatically.
+- Verified read-only probes: [#45402208996](https://github.com/khushifridayagent/reelbrain-knowledge-engine/actions/runs/45402208996),
+  [#45403093805](https://github.com/khushifridayagent/reelbrain-knowledge-engine/actions/runs/45403093805),
+  [#45403770932](https://github.com/khushifridayagent/reelbrain-knowledge-engine/actions/runs/45403770932).
+  All failed *accurately*, without printing raw bearer keys or signed URLs.
+- PRs #36–#38 (CI green) provide safe diagnostic categories, one-linked-IG
+  ID recovery in the production media worker, and non-sensitive Page/
+  permission visibility counts. Backend changes are already merged.
+
+**The exact remaining owner action:** Confirm Instagram account type is
+Business/Creator and **link it to a Facebook Page** accessible to the token
+owner in Meta Business Suite (inactive posting is OK, deactivated/inaccessible
+Page is not). In the **same** Meta App `reel` under Graph API Explorer,
+authorize `instagram_basic`, `instagram_manage_insights`,
+`pages_read_engagement`, `pages_show_list` (Page role granted through
+Business Manager may need `ads_read` or `ads_management`).
+Regenerate a properly scoped token; treat Graph API Explorer tokens as
+**short-lived**, not a six-month credential. A supported long-lived or
+renewable authentication arrangement is needed for hands-off operation.
+Update the existing GitHub protected token with the newly authorized one.
+
+When Meta rate limits clear, query:
+`GET /me/accounts?fields=id,name,instagram_business_account{id,username}`
+and use **`instagram_business_account.id`**, never App ID or Page ID,
+for `REELBRAIN_META_IG_USER_ID`. Re-run
+Actions → `Reelbrain Meta Graph access canary (permissions audit)`
+→ Run workflow. Even with correct account permissions, Meta may omit the
+original `media_url` for copyright/licensed audio or if the owner has
+disabled Reel downloads. Do not mark such Reels visually completed.
+
+**Current knowledge coverage:** 6/6 first-party received Reel URLs have
+actual third-party spoken transcripts saved and retrievable; **0/6 actual
+original frame/OCR/QR visual evidence**. All 6 media tasks remain in the
+durable retry queue. Existing Cloudflare → GitHub best-effort 5-minute
+scheduling is working and has **not been disabled** for this audit.
+
+Official reference: https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-user/business_discovery
+
+
 ### 2026-11-24 verified visual-access status (read this first)
 
 **Real tests:** Cloudflare-hosted Qwen image reasoning worked on a
