@@ -50,6 +50,31 @@ def choose_linked_professional_ig_id(pages:dict, configured_id:str)->str|None:
     return None
 
 
+def inspect_graph_permissions(token:str,*,http=None)->dict:
+    """Return only safe booleans for official Meta Business Discovery scopes.
+
+    No raw Graph error messages, user/page IDs, or access tokens are included.
+    """
+    required=('instagram_basic','instagram_manage_insights',
+              'pages_read_engagement','pages_show_list')
+    empty={p:False for p in required}
+    if not token:return {'readable':False,**empty}
+    import httpx
+    client=http or httpx
+    try:
+        r=client.get(_BASE+'/me/permissions',
+          headers={'Authorization':'Bearer '+token,'Accept':'application/json'},
+          timeout=10,follow_redirects=False)
+        payload=r.json()
+        if r.status_code>=400 or not isinstance(payload,dict) or not isinstance(payload.get('data'),list):
+            return {'readable':False,**empty}
+        granted={v['permission'] for v in payload['data'] if isinstance(v,dict)
+                 and isinstance(v.get('permission'),str) and v.get('status')=='granted'}
+        return {'readable':True,**{key:key in granted for key in required}}
+    except Exception:
+        return {'readable':False,**empty}
+
+
 def check_meta_business_access(
     token:str,own_ig_id:str,enabled:str,*,creator:str='aimortal.ig',
     shortcode:str='DgGHCjZIZtW',http=None
@@ -94,8 +119,17 @@ def check_meta_business_access(
                     'token_valid':True}
         resolved=choose_linked_professional_ig_id(pages,own_ig_id)
         if not resolved:
+            entries=pages.get('data',[]) if isinstance(pages,dict) else []
+            linked={str(v['instagram_business_account']['id'])
+                    for v in entries if isinstance(v,dict)
+                    and isinstance(v.get('instagram_business_account'),dict)
+                    and _ID_RE.fullmatch(str(v['instagram_business_account'].get('id','')))}
             return {'status':'linked_professional_id_ambiguous_or_missing',
-                    'token_valid':True}
+                    'token_valid':True,
+                    'visible_facebook_pages':len(entries),
+                    'visible_professional_instagram_accounts':len(linked),
+                    'page_pagination_incomplete':bool(
+                        (pages.get('paging') or {}).get('next'))}
         account,error=request('/'+resolved,{'fields':'id,username'})
         if error:return {'status':error,'token_valid':True}
         own_ig_id=resolved
