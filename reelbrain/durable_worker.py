@@ -161,6 +161,36 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
             return saved
         finally:db.close()
 
+@contextmanager
+def renewable_lease(config,job_id,token):
+    """Renew using a separate connection; never share the worker transaction."""
+    from threading import Event,Thread
+    stop=Event()
+    lost=Event()
+    def heartbeat():
+        while not stop.wait(60):
+            try:
+                with pg_open(config['db_url']) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""update public.reelbrain_dm_jobs
+                            set lease_until=now()+interval '15 minutes'
+                            where id=%s and status='leased' and lease_token=%s
+                            and lease_until>now() returning id""",(job_id,token))
+                        if not cur.fetchone():
+                            lost.set()
+                            return
+            except Exception:
+                lost.set()
+                return
+    thread=Thread(target=heartbeat,daemon=True)
+    thread.start()
+    try:
+        yield lost
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+
+
 def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[dict]:
     config=config or checked_config()
     with pg_open(config['db_url']) as pg:
@@ -172,7 +202,12 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
         done=[]
         for job_id,url,token in claimed:
             try:
-                r=processor(url,pg) if processor else process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'))
+                if processor:
+                    r=processor(url,pg)
+                else:
+                    with renewable_lease(config,job_id,token) as lost:
+                        r=process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'))
+                        if lost.is_set():raise RuntimeError('worker lease renewal lost')
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
                 quota_retry=r.get('transient_model_retry_seconds')
                 if r.get('status')=='partial' and isinstance(quota_retry,int) and 900<=quota_retry<=86400:
