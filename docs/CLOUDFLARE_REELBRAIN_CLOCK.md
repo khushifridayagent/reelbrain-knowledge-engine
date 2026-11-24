@@ -66,7 +66,7 @@ Sources:
 - https://developers.cloudflare.com/workers/configuration/cron-triggers/
 - https://developers.cloudflare.com/workers/platform/limits/
 
-**What is and is not proved:** Cloudflare triggering works (GitHub `workflow_dispatch` observed), and two real hosted audio transcripts were persisted and searchable as of 2026-11-24. All six original media jobs remain pending independent video/frames/OCR; real Instagram acquisition is still blocked. `REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT=60` is ignored by the selected TranscriptFetch credit-aware worker and does not limit new URL receipts. Workers will pause at actual provider zero credits/402/429 and automatically retry if provider credits actually replenish. The 50 free credits may be one-time and are NOT a promise of monthly renewal. No automatic paying or overage is activated.
+**What is and is not proved:** Cloudflare triggering works (GitHub `workflow_dispatch` observed), and six of six original URLs now have real hosted audio transcripts with timestamps, persisted and searchable as of 2026-11-24. All six original media jobs remain pending independent video/frames/OCR; real Instagram acquisition is still blocked. `REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT=60` is ignored by the selected TranscriptFetch credit-aware worker and does not limit new URL receipts. Workers will pause at actual provider zero credits/402/429 and automatically retry if provider credits actually replenish. The 50 free credits may be one-time and are NOT a promise of monthly renewal. No automatic paying or overage is activated.
 
 **Not a six-month SLA:** Cloudflare free-tier quotas, GitHub Actions
 execution limits, token expiry/rotation, upstream provider outages, or
