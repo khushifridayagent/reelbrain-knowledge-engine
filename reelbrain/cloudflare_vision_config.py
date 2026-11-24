@@ -14,8 +14,9 @@ _ACCOUNT_RE=re.compile(r'^[a-fA-F0-9]{32}$')
 def cloudflare_qwen_config()->dict|None:
     if os.getenv('REELBRAIN_CLOUDFLARE_VISION_ENABLED')!='1':
         return None
-    if os.getenv('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')!='1':
-        return None
+    # The Cloudflare-specific vision flag itself is the user's explicit
+    # consent to send *visual frames* to that provider. It must NOT
+    # incidentally authorize a different Groq/Gemini external-model upload.
     account=os.getenv('CLOUDFLARE_ACCOUNT_ID','')
     key=os.getenv('CLOUDFLARE_AI_API_TOKEN','')
     if not account or not key:
