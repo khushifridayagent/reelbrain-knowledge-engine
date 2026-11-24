@@ -63,6 +63,7 @@ def pg_open(db_url:str):
 def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->dict:
     from tempfile import TemporaryDirectory
     from .public_bundle import acquire_public_bundle
+    from .session_cookies import temporary_instagram_cookies
     with TemporaryDirectory(prefix='rb_reel_worker_') as d:
         db=KnowledgeStore(Path(d)/'isolated_evidence.sqlite')
         try:
@@ -93,7 +94,10 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
             if acquisition=='yt_dlp_public':
                 # Public-only: yt-dlp then gallery-dl fallback, or full photo
                 # carousel. Every page must pass media-byte validation.
-                bundle=acquire_public_bundle(source_url,Path(d))
+                # The optional user-managed session is a private, transient
+                # alternative when Instagram rejects anonymous datacenter IPs.
+                with temporary_instagram_cookies() as cookies:
+                    bundle=acquire_public_bundle(source_url,Path(d),cookies_file=cookies)
                 result=engine_factory(db).ingest(
                     list(bundle.paths),source_url,
                     allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
