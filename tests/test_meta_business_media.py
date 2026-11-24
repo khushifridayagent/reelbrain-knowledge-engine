@@ -154,7 +154,7 @@ class MetaDiscoveryTests(unittest.TestCase):
             headers={'content-length':'60'}
             def __enter__(self):return self
             def __exit__(self,*args):return False
-            def iter_bytes(self,chunk_size=1024):yield b'\\xff\\xd8\\xff'+b'X'*58
+            def iter_bytes(self,chunk_size=1024):yield bytes.fromhex('ffd8ff')+b'X'*58
         class Downloader:
             def __init__(self):self.paths=[]
             def stream(self,method,url,**kwargs):self.paths.append(url);return SourceStream()
