@@ -53,7 +53,7 @@ class TranscriptFetchTests(unittest.TestCase):
         method,endpoint,params=h.calls[0]
         self.assertEqual(method,'post')
         self.assertEqual(endpoint,'https://transcriptfetch.com/api/v2/transcripts/video')
-        self.assertEqual(params['json'],{'video':SOURCE,'mode':'audio','timestamps':'segment'})
+        self.assertEqual(params['json'],{'video':SOURCE,'mode':'audio','timestamps':True})
         self.assertEqual(params['headers']['Authorization'],'Bearer fixture')
 
     def test_poll_uses_fixed_endpoint_and_same_job_identifier(self):
