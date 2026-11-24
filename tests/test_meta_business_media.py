@@ -169,4 +169,49 @@ class MetaDiscoveryTests(unittest.TestCase):
             self.assertEqual(bundle.provider,'meta-business-discovery-official')
 
 
+    def test_production_media_lookup_repairs_page_id_with_one_linked_ig(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery
+        class Result:
+            status_code=200
+            def __init__(self,payload):self.payload=payload
+            def json(self):return self.payload
+            def raise_for_status(self):pass
+        class Requests:
+            def __init__(self):self.calls=[]
+            def get(self,url,**kwargs):
+                self.calls.append((url,kwargs))
+                count=len(self.calls)
+                if count==1:
+                    return Result({'error':{'code':100,'message':'raw message untrusted'}})
+                if count==2:
+                    return Result({'data':[{'id':'11223344',
+                        'instagram_business_account':{'id':'17841400001234567'}}]})
+                return Result(response_for())
+        http=Requests()
+        found=MetaBusinessDiscovery('fixture','1234567890',http=http).find(SRC,'aimortal.ig')
+        self.assertEqual(len(found),1)
+        self.assertEqual(len(http.calls),3)
+        self.assertTrue(http.calls[-1][0].endswith('/17841400001234567'))
+
+    def test_ambiguous_page_connections_fail_closed_without_media_lookup(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery,MetaMediaUnavailable
+        class Result:
+            status_code=200
+            def __init__(self,payload):self.payload=payload
+            def json(self):return self.payload
+            def raise_for_status(self):pass
+        class Requests:
+            def __init__(self):self.calls=[]
+            def get(self,url,**kwargs):
+                self.calls.append((url,kwargs))
+                if len(self.calls)==1:
+                    return Result({'error':{'code':100}})
+                return Result({'data':[
+                  {'instagram_business_account':{'id':'17841400001234567'}},
+                  {'instagram_business_account':{'id':'17841400007654321'}}]})
+        http=Requests()
+        with self.assertRaises(MetaMediaUnavailable):
+            MetaBusinessDiscovery('fixture','1234567890',http=http).find(SRC,'aimortal.ig')
+        self.assertEqual(len(http.calls),2)
+
 if __name__=='__main__':unittest.main()
