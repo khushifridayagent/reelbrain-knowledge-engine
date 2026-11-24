@@ -15,6 +15,10 @@ def require_successful_batch(outcomes: list[dict]) -> None:
     """
     for outcome in outcomes:
         status = outcome.get("status") if isinstance(outcome, dict) else None
+        if status == "deferred_access":
+            if not outcome.get("acknowledged_failure"):
+                raise RuntimeError("Media access deferral could not be acknowledged in the durable queue")
+            raise RuntimeError("Instagram public media is inaccessible; job safely deferred without exhausting retries")
         if status == "retry_or_dead_letter":
             if not outcome.get("acknowledged_failure"):
                 raise RuntimeError("Media failure was not acknowledged by the durable queue")
