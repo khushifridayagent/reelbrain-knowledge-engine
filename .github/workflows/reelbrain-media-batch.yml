@@ -30,7 +30,7 @@ jobs:
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
       REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED: '1'
-      REELBRAIN_MEDIA_ACQUISITION: 'yt_dlp_public'
+      REELBRAIN_MEDIA_ACQUISITION: ${{ vars.REELBRAIN_MEDIA_ACQUISITION || 'yt_dlp_public' }}
       REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD: '1'
       # Optional private Netscape cookies.txt, encoded as base64.
       # Do not use a repository variable or commit cookies to git.
@@ -45,8 +45,10 @@ jobs:
       REELBRAIN_QWEN_VL_BASE_URL: ${{ secrets.REELBRAIN_QWEN_VL_BASE_URL }}
       REELBRAIN_QWEN_VL_API_KEY: ${{ secrets.REELBRAIN_QWEN_VL_API_KEY }}
       REELBRAIN_QWEN_VL_MODEL: ${{ vars.REELBRAIN_QWEN_VL_MODEL || 'Qwen/Qwen3-VL-8B-Instruct' }}
-      # No paid acquisition, private/cookie access or model uploads by default.
-      REELBRAIN_PAID_PROVIDER_APPROVED: '0'
+      # Paid Apify actor stays DISABLED until owner sets mode, private token, and approval gates.
+      REELBRAIN_PAID_PROVIDER_APPROVED: ${{ vars.REELBRAIN_PAID_PROVIDER_APPROVED || '0' }}
+      REELBRAIN_SOURCE_RIGHTS_CONFIRMED: ${{ vars.REELBRAIN_SOURCE_RIGHTS_CONFIRMED || '0' }}
+      APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
       REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED: ${{ vars.REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED || '0' }}
       PYTHONUNBUFFERED: '1'
     steps:
