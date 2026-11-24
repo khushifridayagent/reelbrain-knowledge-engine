@@ -60,10 +60,33 @@ def pg_open(db_url:str):
     except ImportError as e:raise RuntimeError('Install psycopg[binary] in worker environment') from e
     return psycopg.connect(db_url,connect_timeout=6)
 
+def reusable_hosted_audio(pg,source_url:str)->str|None:
+    """Reuse the exact saved third-party transcript; never relabel it as local ASR."""
+    with pg.cursor() as cur:
+        cur.execute("select verified_reel_content->'provider_audio_transcript' "
+                    "from public.reelbrain_reel_knowledge where source_url=%s",(source_url,))
+        row=cur.fetchone()
+    record=row[0] if row else None
+    if not isinstance(record,dict) or record.get('provider') not in ('transcriptfetch','scrapecreators'):
+        return None
+    if record.get('source_type')!='third_party_asr_by_reel_url':
+        return None
+    if not isinstance(record.get('text'),str) or not record['text'].strip():
+        return None
+    segments=record.get('segments')
+    if not isinstance(segments,list) or not segments or not any(
+        isinstance(x,dict) and isinstance(x.get('text'),str) and x['text'].strip()
+        for x in segments):
+        return None
+    return record['provider']
+
+
 def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->dict:
     from tempfile import TemporaryDirectory
     from .public_bundle import acquire_public_bundle
     from .session_cookies import temporary_instagram_cookies
+    hosted_audio=reusable_hosted_audio(pg,source_url) if acquisition=='yt_dlp_public' else None
+    if hosted_audio:print('HOSTED_AUDIO_REUSED provider='+hosted_audio,flush=True)
     with TemporaryDirectory(prefix='rb_reel_worker_') as d:
         db=KnowledgeStore(Path(d)/'isolated_evidence.sqlite')
         try:
@@ -74,7 +97,7 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                 cf_vision=cloudflare_qwen_config()
                 # Provider-specific Cloudflare vision opt-in must NOT silently
                 # activate unrelated Groq paid ASR or Gemini model uploads.
-                if generic_external_allowed and os.getenv('GROQ_API_KEY'):
+                if not hosted_audio and generic_external_allowed and os.getenv('GROQ_API_KEY'):
                     asr=GroqSpeechToText(ProviderOptions(
                         os.environ['GROQ_API_KEY'],
                         os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
@@ -96,7 +119,7 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                     vlm=GeminiVideoResearcher(
                         os.environ['GEMINI_API_KEY'],
                         os.getenv('GEMINI_VIDEO_MODEL',''))
-                if asr is None and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
+                if not hosted_audio and asr is None and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
                     # Local Whisper executes fully on CPU, without any API upload.
                     from .local_asr import FasterWhisperSpeechToText
                     asr=FasterWhisperSpeechToText(
@@ -120,7 +143,8 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                     allow_external=(flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
                                     or flag('REELBRAIN_CLOUDFLARE_VISION_ENABLED')))
                 result={**result,'media_processed':bool(result.get('processing_receipt_id')),
-                        'provider':bundle.provider,'media_deleted_after_processing':True}
+                        'provider':bundle.provider,'media_deleted_after_processing':True,
+                        'hosted_audio_reused':hosted_audio}
             elif acquisition=='apify':
                 result=process_instagram_link(db,source_url,
                     options=LinkProcessingOptions(allow_paid=True,allow_external=True,rights_confirmed=True),
