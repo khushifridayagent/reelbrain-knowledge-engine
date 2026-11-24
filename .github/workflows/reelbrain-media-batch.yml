@@ -54,6 +54,9 @@ jobs:
       REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED: ${{ vars.REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED || '0' }}
       REELBRAIN_META_IG_USER_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
       REELBRAIN_META_GRAPH_TOKEN: ${{ secrets.REELBRAIN_META_GRAPH_TOKEN }}
+      # Separate opt-in public media API, no changes to hosted speech configuration.
+      REELBRAIN_MEDIA_SCRAPECREATORS_ENABLED: ${{ vars.REELBRAIN_MEDIA_SCRAPECREATORS_ENABLED || '0' }}
+      REELBRAIN_MEDIA_SCRAPECREATORS_API_KEY: ${{ secrets.REELBRAIN_MEDIA_SCRAPECREATORS_API_KEY }}
       # Free open-source CPU speech fallback (downloaded/cached on demand).
       REELBRAIN_ENABLE_LOCAL_ASR: '1'
       REELBRAIN_LOCAL_ASR_MODEL: 'small'
