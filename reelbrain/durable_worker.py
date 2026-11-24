@@ -269,14 +269,15 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                 seconds_to_wait=access_backoff_seconds(exc)
                 pg.rollback()
                 reason=type(exc).__name__+': media worker stage incomplete'
-                if seconds_to_wait is None:seconds_to_wait=3600
                 with pg.cursor() as cur:
                     if seconds_to_wait is not None:
                         # A datacenter 403/429 must not burn a Reel's finite
                         # code-bug retries, or destroy recoverable public links.
                         cur.execute('select public.reelbrain_defer_dm_job(%s,%s,%s,%s)',
                                     (job_id,token,reason,seconds_to_wait))
-
+                    else:
+                        cur.execute('select public.reelbrain_fail_dm_job(%s,%s,%s)',
+                                    (job_id,token,reason))
                     ok=cur.fetchone()[0]
                 pg.commit()
                 done.append({'id':job_id,
