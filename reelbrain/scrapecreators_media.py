@@ -44,7 +44,7 @@ def parse_public_assets(url:str,payload:dict)->tuple[MetaSourceAsset,...]:
         rows=[edge.get('node') if isinstance(edge,dict) else None for edge in edges]
     else:
         rows=[node]
-    if ('/reel/' in canon or '/tv/' in canon) and (len(rows)!=1 or rows[0] is None or rows[0].get('is_video') is not True):
+    if ('/reel/' in canon or '/tv/' in canon) and (len(rows)!=1 or not isinstance(rows[0],dict) or rows[0].get('is_video') is not True):
         raise unavailable('reel_original_video_missing')
     assets=[]
     for row in rows:
