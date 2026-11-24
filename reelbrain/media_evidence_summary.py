@@ -6,7 +6,7 @@ An observed Reel is NOT independently verified by an LLM.
 """
 from __future__ import annotations
 
-SOURCE_KINDS = {'ocr', 'asr', 'caption', 'manual', 'document', 'verified_doc'}
+SOURCE_KINDS = {'ocr', 'qr', 'asr', 'caption', 'manual', 'document', 'verified_doc'}
 
 
 def build_media_summary(observations: list[dict], result: dict) -> dict:

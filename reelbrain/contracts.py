@@ -85,7 +85,7 @@ def evidence_filter(candidates:list[ResourceCandidate], observations:list[Observ
     """
     out=FilterResult()
     proofs:dict[str,list[str]]={}
-    allowed={'ocr','asr','caption','document','manual','verified_doc'}
+    allowed={'ocr','qr','asr','caption','document','manual','verified_doc'}
     for ev in observations:
         if ev.kind not in allowed:
             continue

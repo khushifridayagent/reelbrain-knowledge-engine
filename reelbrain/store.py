@@ -195,7 +195,7 @@ class KnowledgeStore:
             if not link or not result or link['source_ref'] != result['source_ref'] or link['kind'] not in ('reel','carousel') or result['kind'] != link['kind'] or reel_source_id == result_source_id or not link['link_only'] or result['link_only']:
                 raise ValueError('media result does not belong to this reel')
             original = self.con.execute('''SELECT COUNT(*) AS count FROM evidence WHERE source_id=?
-                AND kind IN ('ocr','asr','caption','manual','verified_doc')
+                AND kind IN ('ocr','qr','asr','caption','manual','verified_doc')
                 AND length(trim(verbatim))>0''', (result_source_id,)).fetchone()['count']
             if original == 0:
                 model_count = self.con.execute('''SELECT COUNT(*) AS count FROM evidence WHERE source_id=?
