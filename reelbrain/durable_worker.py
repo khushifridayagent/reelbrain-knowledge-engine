@@ -241,7 +241,7 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                         if lost.is_set():raise RuntimeError('worker lease renewal lost')
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
                 quota_retry=r.get('transient_model_retry_seconds')
-                if r.get('status')=='partial' and quota_retry is None and r.get('incomplete_stages'):
+                if r.get('status')=='partial' and quota_retry is None:
                     quota_retry=3600
                 if r.get('status')=='partial' and isinstance(quota_retry,int) and 900<=quota_retry<=86400:
                     # Model Neuron/ASR quota exhausted: preserve all saved
