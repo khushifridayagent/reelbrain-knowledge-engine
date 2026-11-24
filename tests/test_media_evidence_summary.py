@@ -64,4 +64,21 @@ class MediaSummaryTests(unittest.TestCase):
         self.assertEqual(len(out['content']['source_observations']),80)
         self.assertEqual(len(out['content']['model_inferences']),1)
 
+    def test_persistence_status_cannot_disagree_with_completion_summary(self):
+        from reelbrain.remote_reel_writer import media_persistence_decision
+        events=[{'kind':'ocr','locator':'00:01','verbatim':'Text'},
+                {'kind':'model_inference','locator':'00:01','verbatim':'Visual evidence'}]
+        base={'media_processed':True,'status':'evidence_saved','stage_errors':{},
+              'stage_observations':{'ocr':1,'asr':0,'vlm':1},'audio_required':True}
+        status,missing,summary=media_persistence_decision(events,base)
+        self.assertEqual(status,'partial')
+        self.assertIn('completion_evidence',missing)
+        self.assertEqual(summary['processing_stage'],'partial_media')
+        status,missing,summary=media_persistence_decision(events,{**base,'hosted_audio_reused':'transcriptfetch'})
+        self.assertEqual(status,'evidence_saved')
+        self.assertEqual(missing,[])
+        self.assertEqual(summary['processing_stage'],'completed')
+        self.assertFalse(summary['audio_transcribed'])
+        self.assertEqual(summary['content']['hosted_audio_reused'],'transcriptfetch')
+
 if __name__=='__main__':unittest.main()

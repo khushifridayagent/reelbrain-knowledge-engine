@@ -23,4 +23,9 @@ class LocalASRTests(unittest.TestCase):
         from reelbrain.local_asr import FasterWhisperSpeechToText
         with self.assertRaises(ValueError):
             FasterWhisperSpeechToText(model_size='hugemodel-remote')
+    def test_worker_dependency_resolves_compatible_audio_decoder(self):
+        from pathlib import Path
+        req=(Path(__file__).resolve().parents[1]/'requirements-worker.txt').read_text()
+        self.assertIn('av==18.1.0',req.splitlines())
+
 if __name__=='__main__':unittest.main()
