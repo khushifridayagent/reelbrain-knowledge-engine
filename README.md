@@ -3,12 +3,16 @@
 ## LIVE VERIFIED — 24 Nov 2026, 16:40 IST
 
 **Cloudflare→GitHub workflow_dispatch:** ✅ verified, no new PAT needed.
-**Supabase connection / URL-first TranscriptFetch:** ✅ live and storing real
-third-party speech transcripts. Initial two successful URLs were the
-Google Compute Engine and Paperclip Reels; retrieved successfully by
+**Supabase connection / URL-first TranscriptFetch:** ✅ live with all **6 of 6** original
+Reels now storing actual third-party audio speech, each with timestamped segments.
+Initial two were Google Compute Engine and Paperclip; the subsequent four
+came from real GitHub Actions run #45384096213 (four provider starts and four
+verified speech records). Retrieved successfully by
 `reelbrain_research.search_reels('dashboard shows every task',12)` with
 `verification_level=third_party_url_speech_transcript`. First-party
 video frames, OCR and complete visual coverage remain **NOT VERIFIED**.
+
+**Audio milestone:** 6/6 hosted speech; **visual/OCR milestone:** 0/6 original frames analyzed, so six original media jobs intentionally remain queued for retry. Provider transcription is not proof of visual content.
 
 **Elastic queue:** for the selected `transcriptfetch` provider, the old
 `REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT=60` is now ignored as a daily
