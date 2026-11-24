@@ -19,6 +19,10 @@ def require_successful_batch(outcomes: list[dict]) -> None:
             if not outcome.get("acknowledged_failure"):
                 raise RuntimeError("Media access deferral could not be acknowledged in the durable queue")
             raise RuntimeError("Instagram public media is inaccessible; job safely deferred without exhausting retries")
+        if status == "deferred_model_quota":
+            if not outcome.get("acknowledged_failure"):
+                raise RuntimeError("Model quota deferral was not acknowledged by the durable queue")
+            raise RuntimeError("Hosted video/audio model quota unavailable; Reel safely queued for later retry")
         if status == "retry_or_dead_letter":
             if not outcome.get("acknowledged_failure"):
                 raise RuntimeError("Media failure was not acknowledged by the durable queue")

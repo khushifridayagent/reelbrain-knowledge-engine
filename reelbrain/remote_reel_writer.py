@@ -87,5 +87,11 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
                  json.dumps([source_trace],ensure_ascii=False),
                  summary['video_analyzed'],summary['audio_transcribed'],
                  summary['ocr_analyzed'],summary['processing_stage']))
+    from .model_quota_retry import model_quota_retry_seconds
+    # Preserve successful OCR/ASR even when a remote model quota is exhausted.
+    # Return a numeric retry hint only; never print provider error bodies.
+    retry_after=(model_quota_retry_seconds(result.get('stage_errors'))
+                 if status=='partial' else None)
     return {'source_url':canonical,'source_id':source_id,'observation_count':len(observations),
-            'resource_citations':len(resources),'status':status,'persisted_in_postgres':True}
+            'resource_citations':len(resources),'status':status,'persisted_in_postgres':True,
+            'transient_model_retry_seconds':retry_after}
