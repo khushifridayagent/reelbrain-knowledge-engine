@@ -36,9 +36,10 @@ class ResumableMediaTests(unittest.TestCase):
             with lock:
                 counter[0]+=1
                 job=counter[0]
+            if job==2:
+                self.assertTrue(first_analysis.wait(3))
             with stage_slot('download'):
                 if job==2:
-                    self.assertTrue(first_analysis.wait(3))
                     second_download.set()
             with stage_slot('analysis'):
                 if job==1:
