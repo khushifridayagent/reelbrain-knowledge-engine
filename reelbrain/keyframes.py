@@ -60,25 +60,32 @@ def ocr(img_bgr: np.ndarray, psm: int = 6, lang: str = "eng+hin") -> "tuple[str,
 
 
 def iter_frames(path: str, hz: float, start: float = 0.0, end: Optional[float] = None) -> Iterator["tuple[float, np.ndarray]"]:
+    if hz <= 0 or hz > 60 or start < 0 or (end is not None and end < start):
+        raise ValueError('Invalid video sampling bounds')
     cap = cv2.VideoCapture(path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, round(fps / hz))
-    if start:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(start * fps))
-    i = int(start * fps)
-    while True:
-        ok = cap.grab()
-        if not ok:
-            break
-        t = i / fps
-        if end is not None and t > end:
-            break
-        if (i - int(start * fps)) % step == 0:
-            ok, frame = cap.retrieve()
-            if ok:
-                yield t, frame
-        i += 1
-    cap.release()
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError('Original video could not be decoded')
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        step = max(1, round(fps / hz))
+        if start:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(start * fps))
+        i = int(start * fps)
+        while True:
+            ok = cap.grab()
+            if not ok:
+                break
+            t = i / fps
+            if end is not None and t > end:
+                break
+            if (i - int(start * fps)) % step == 0:
+                ok, frame = cap.retrieve()
+                if ok:
+                    yield t, frame
+            i += 1
+    finally:
+        cap.release()
 
 
 def iter_changed_frames(path: str, hz: float = 10.0, thresh: int = 12) -> Iterator["tuple[float, np.ndarray]"]:
