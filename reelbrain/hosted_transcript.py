@@ -16,10 +16,14 @@ class TranscriptProviderError(RuntimeError):
 
 
 def hosted_transcript_enabled() -> bool:
+    provider=os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_PROVIDER','scrapecreators').strip().lower()
+    key_name={'scrapecreators':'REELBRAIN_TRANSCRIPT_API_KEY',
+              'transcriptfetch':'TRANSCRIPTFETCH_API_KEY'}.get(provider)
     return (
-        os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_ENABLED') == '1'
+        bool(key_name)
+        and os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_ENABLED') == '1'
         and os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED') == '1'
-        and bool(os.environ.get('REELBRAIN_TRANSCRIPT_API_KEY'))
+        and bool(os.environ.get(key_name,''))
     )
 
 
