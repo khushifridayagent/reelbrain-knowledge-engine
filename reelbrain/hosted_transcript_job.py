@@ -13,6 +13,25 @@ from .hosted_transcript import (
 )
 
 
+def daily_transcript_request_cap()->int:
+    """Maximum new hosted ASR billable STARTS per UTC day.
+
+    Defaults to two; user may explicitly allow more after confirming the
+    provider's current plan, purchase cap and genuine account credits.
+    This is a request limit, not a monetary spend guarantee: long videos
+    can cost multiple credits per start.
+    """
+    approved=os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED')=='1'
+    value=os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT','2') if approved else '2'
+    try:
+        cap=int(value)
+    except (TypeError,ValueError):
+        raise ValueError('Hosted daily request limit must be an integer') from None
+    if not 1<=cap<=120:
+        raise ValueError('Hosted daily request limit must be between 1 and 120')
+    return cap
+
+
 def _reserve_one(pg,provider='scrapecreators'):
     """Reserve a fresh provider request under a global transaction lock.
 
@@ -47,9 +66,9 @@ def _reserve_one(pg,provider='scrapecreators'):
                 ON CONFLICT (usage_day) DO UPDATE SET
                   reserved_calls=reelbrain_research.hosted_transcript_daily_budget.reserved_calls+1,
                   updated_at=now()
-                WHERE reelbrain_research.hosted_transcript_daily_budget.reserved_calls < 2
+                WHERE reelbrain_research.hosted_transcript_daily_budget.reserved_calls < %s
                 RETURNING reserved_calls
-            """)
+            """,(daily_transcript_request_cap(),))
             if cur.fetchone() is None:return None
             cur.execute("""
                 INSERT INTO reelbrain_research.hosted_transcript_attempts

@@ -30,9 +30,12 @@ jobs:
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
       # Separate URL-first speech API. BOTH approval variables are required;
-      # completely inert if unset. Hard capped to 2 reserved calls per UTC day.
+      # completely inert if unset. Defaults to 2 reserved calls/UTC day.
       REELBRAIN_HOSTED_TRANSCRIPT_ENABLED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_ENABLED || '0' }}
       REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED || '0' }}
+      # Defaults to 2/day. Increase only after checking provider billing and
+      # declaring owner-approved credit budget; hard cap 120 starts per UTC day.
+      REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT || '2' }}
       REELBRAIN_TRANSCRIPT_API_KEY: ${{ secrets.REELBRAIN_TRANSCRIPT_API_KEY }}
       # URL-first transcript provider: choose 'scrapecreators' (default) or
       # 'transcriptfetch'; both require the same TWO explicit opt-in variables.
