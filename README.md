@@ -1,5 +1,39 @@
 # Reelbrain Knowledge Engine
 
+## 2026-11-24 — free GPU and 2–6 month unattended research
+
+**Read first:** [Free GPU / hands-off architecture audit](docs/FREE_GPU_AND_HANDS_OFF_RESEARCH_2026_11.md), [One-shot TinyFish brief](docs/TINYFISH_ONE_SHOT_AUDIT_PROMPT.md).
+
+**New research finding:** Cloudflare Workers AI (available in the connected account) hosts
+`@cf/qwen/qwen3.8-27b` **vision** and
+`@cf/openai/whisper-large-v3-turbo` **speech recognition**.
+The Workers AI Free allowance is **10,000 Neurons per day shared by all
+models**. This is a *candidate inference backend*, **not** a deployed
+end-to-end pipeline or a native arbitrary-Instagram-Reel URL transcriber.
+Audio bytes and decoded video frames must be made accessible to the service.
+At 60 x 2-minute Reels/day, Whisper-only usage is theoretically about
+5,596 Neurons before retries/vision; actual provider limits and access
+conditions require a real benchmark.
+
+**Alternative GPU:** Modal advertises **$30/month recurring compute credit**
+on Starter with scale-to-zero GPU containers; real Qwen3-VL throughput, account
+eligibility, request admission and total GPU/CPU/memory charges must be tested
+before deployment. **Railway's Free plan is not a free always-on Qwen GPU.**
+TinyFish Search/Fetch are documented free; Agent/Browser calls use limited
+credits. TinyFish is **not currently connected to this conversation**; its
+full consolidated research brief has been committed without using those credits.
+
+**Operational reality:** all **six** original Reel jobs are still queued,
+creator/caption metadata is saved, **0/6** have independently verified
+video/ASR/OCR observations. The separate Cloudflare backup cron exists but
+needs a fine-grained GitHub Actions token in its own private secret to work.
+URL-first paid transcript provider and hosted Qwen3-VL remain opt-in/off.
+Do not mistake GitHub green CI or saved captions for full video understanding.
+
+**No frontend, See More Details UI, provider spending, or unrelated projects
+were changed by this research phase.**
+
+
 Evidence-first personal Instagram Reel → searchable knowledge pipeline, designed for isolation and auditable source links.
 
 **State (24 November 2026):** Phase 9 autonomous **DM intake and queue coordination deployed** on isolated Supabase; one real direct `ig_reel` received and persisted. Exactly three owner-approved sender IDs are stored only in the private Supabase allowlist. Postgres cron rechecks queue every five minutes, and official Graph reconciliation checks each sender roughly every 15 minutes. Public Reel caption/metadata and distinct official-topic research can be stored in `reelbrain_reel_knowledge`. **Actual full-video OCR/ASR/VLM worker is implemented in Python but NOT hosted or verified on real media.** Website is NOT hosted. The repository is PUBLIC and contains code and synthetic tests only, no secrets or private media.
