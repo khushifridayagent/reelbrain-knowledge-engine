@@ -23,6 +23,16 @@ def classify_model_http(code):
     if code in (502,503,504):return 'service unavailable'
     return f'visual request rejected HTTP {int(code)}'
 
+def required_incomplete_stages(result):
+    """Required media passes, not optional structured enrichment."""
+    missing=set(result.get('stage_errors') or {})
+    for stage in result.get('unattempted_modalities') or []:
+        if stage=='video_model':
+            missing.add(stage)
+        elif stage=='asr' and result.get('audio_required',True) and not result.get('hosted_audio_reused'):
+            missing.add(stage)
+    return sorted(missing)
+
 def retry_seconds(errors):
     from .model_quota_retry import model_quota_retry_seconds
     if not errors:return None
