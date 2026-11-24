@@ -54,10 +54,15 @@ class QwenVLResearcher:
             p.scheme!='https' and not (p.scheme=='http' and loopback)
         ) or not p.path.rstrip('/').endswith('/v1'):
             raise ValueError('Qwen endpoint must be HTTPS /v1 or local loopback HTTP /v1')
-        if not 1<=max_frames<=8 or not 1<=max_batches<=4:
-            raise ValueError('Visual batches must fit 1–8 images, 1–4 calls per video')
+        if not 1<=max_frames<=8 or not 1<=max_batches<=8 or max_frames*max_batches>32:
+            raise ValueError('Visual budget must fit 1–8 images per call and at most 32 images per video')
         if not model or len(model)>120:raise ValueError('Qwen model identifier required')
         self.url=base_url.rstrip('/')+'/chat/completions'
+        self.cloudflare_direct=(host=='api.cloudflare.com' and
+            bool(re.fullmatch(r'/client/v4/accounts/[a-fA-F0-9]{32}/ai/v1',p.path.rstrip('/')))
+            and model=='@cf/qwen/qwen3.8-27b')
+        if self.cloudflare_direct:
+            self.url=base_url.rstrip('/')[:-3]+'/run/'+model
         self.model=model
         self.key=api_key
         self.max_frames=max_frames
@@ -133,8 +138,8 @@ class QwenVLResearcher:
         finally:cap.release()
         budget=self.max_frames*self.max_batches
         if len(candidates)>budget:
-            ids=sorted({round(i*(len(candidates)-1)/(budget-1))
-                        for i in range(budget)})
+            ids=([0] if budget==1 else sorted({round(i*(len(candidates)-1)/(budget-1))
+                        for i in range(budget)}))
             selected=[candidates[index] for index in ids]
         else:
             selected=candidates
@@ -172,8 +177,8 @@ class QwenVLResearcher:
             # without returning a message.content (finish_reason=length).
             # Cloudflare documents reasoning_effort=low and JSON mode;
             # use both only for that verified provider.
-            if (self.model.startswith('@cf/qwen/') and
-                    self.url.startswith('https://api.cloudflare.com/')):
+            if self.cloudflare_direct:
+                body.pop('model',None)
                 body.pop('max_tokens',None)
                 body.update({
                     'reasoning_effort':'low',
@@ -184,20 +189,29 @@ class QwenVLResearcher:
             if self.key:headers['Authorization']='Bearer '+self.key
             try:
                 response=(self.client or httpx).post(
-                    self.url,json=body,headers=headers,timeout=85)
+                    self.url,json=body,headers=headers,timeout=120 if self.cloudflare_direct else 85)
                 code=getattr(response,'status_code',200)
                 if code in (402,429):
                     raise QwenPartialVisualError('quota exceeded',retained)
-                if code in (502,503,504):
+                if code in (502,503,504,522,524):
                     raise QwenPartialVisualError('service unavailable',retained)
                 if code>=400:
                     from .resumable_media import classify_model_http
                     raise QwenPartialVisualError(classify_model_http(code),retained)
                 response.raise_for_status()
-                content=response.json()['choices'][0]['message']['content']
+                payload=response.json()
+                if self.cloudflare_direct:
+                    if payload.get('success') is not True:
+                        raise QwenPartialVisualError('Cloudflare visual response unsuccessful',retained)
+                    payload=payload['result']
+                choice=payload['choices'][0]
+                if choice.get('finish_reason')=='length':
+                    raise QwenPartialVisualError('visual response token limit reached',retained)
+                content=choice['message']['content']
                 if isinstance(content,list):
                     content=''.join(str(x.get('text','')) for x in content if isinstance(x,dict))
                 entries=self._parse(str(content).strip())
+                previous_count=len(retained)
                 for item in entries:
                     if not isinstance(item,dict):continue
                     desc=str(item.get('description','')).strip()[:3000]
@@ -210,8 +224,14 @@ class QwenVLResearcher:
                         locator=f'qwen3-vl:batch:{batch_no:02d}/unspecified'
                     retained.append(Observation(
                         desc,kind='model_inference',locator=locator))
+                if len(retained)==previous_count:
+                    raise QwenPartialVisualError('empty structured visual observations',retained)
             except QwenPartialVisualError:
                 raise
+            except httpx.TimeoutException:
+                raise QwenPartialVisualError('visual request timeout',retained) from None
+            except httpx.NetworkError:
+                raise QwenPartialVisualError('visual network unavailable',retained) from None
             except (KeyError,IndexError,TypeError,ValueError,json.JSONDecodeError):
                 raise QwenPartialVisualError('invalid structured visual response',retained) from None
             except Exception:
