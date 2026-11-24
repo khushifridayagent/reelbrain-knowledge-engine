@@ -214,4 +214,39 @@ class MetaDiscoveryTests(unittest.TestCase):
             MetaBusinessDiscovery('fixture','1234567890',http=http).find(SRC,'aimortal.ig')
         self.assertEqual(len(http.calls),2)
 
+    def test_graph_rate_limit_is_not_reported_as_permission_failure(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery,MetaMediaUnavailable
+        from reelbrain.access_backoff import access_backoff_seconds
+        http=FakeClient({'error':{'code':4,'message':'private message'}})
+        with self.assertRaises(MetaMediaUnavailable) as err:
+            MetaBusinessDiscovery('fixture','17841400001234567',http=http).find(SRC,'aimortal.ig')
+        self.assertIn('app_rate_limited',str(err.exception))
+        self.assertEqual(access_backoff_seconds(err.exception),43200)
+        self.assertNotIn('private message',str(err.exception))
+        self.assertEqual(len(http.requests),1)
+
+    def test_expired_token_is_distinct_from_missing_media(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery,MetaMediaUnavailable
+        http=FakeClient({'error':{'code':190,'message':'private token'}})
+        with self.assertRaisesRegex(MetaMediaUnavailable,'token_expired_or_invalid'):
+            MetaBusinessDiscovery('fixture','17841400001234567',http=http).find(SRC,'aimortal.ig')
+        self.assertEqual(len(http.requests),1)
+
+    def test_graph_missing_url_and_unsupported_cdn_are_distinct(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery,MetaMediaUnavailable
+        for value,reason in [(None,'original_media_url_omitted'),
+                             ('https://example.org/video.mp4','untrusted_media_url')]:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(MetaMediaUnavailable,reason):
+                    MetaBusinessDiscovery('fixture','17841400001234567',
+                         http=FakeClient(response_for(media_url=value))).find(SRC,'aimortal.ig')
+
+    def test_reel_cannot_be_marked_acquired_from_static_image(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery,MetaMediaUnavailable
+        payload=response_for()
+        payload['business_discovery']['media']['data'][0]['media_type']='IMAGE'
+        with self.assertRaisesRegex(MetaMediaUnavailable,'reel_original_video_missing'):
+            MetaBusinessDiscovery('fixture','17841400001234567',
+                  http=FakeClient(payload)).find(SRC,'aimortal.ig')
+
 if __name__=='__main__':unittest.main()
