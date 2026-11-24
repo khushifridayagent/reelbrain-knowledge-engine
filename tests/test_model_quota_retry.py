@@ -1,5 +1,6 @@
 """Free hosted vision/ASR quota exhaustion must not permanently finish a Reel."""
 import unittest
+from datetime import datetime,timezone
 from reelbrain.model_quota_retry import model_quota_retry_seconds
 from reelbrain.batch_outcome import require_successful_batch
 
@@ -9,6 +10,13 @@ class ModelQuotaRetryTests(unittest.TestCase):
             'vlm':"HTTPStatusError: 429 Too Many Requests - daily neuron quota exhausted"})
         self.assertGreaterEqual(delay,3600)
         self.assertLessEqual(delay,86400)
+
+    def test_daily_neuron_budget_retries_just_after_next_utc_reset(self):
+        # Reset is daily UTC, not an arbitrary 24h after hitting the limit.
+        clock=datetime(2026,11,24,23,55,tzinfo=timezone.utc)
+        delay=model_quota_retry_seconds(
+            {'vlm':'429 daily Neuron quota exhausted'},now=clock)
+        self.assertEqual(delay,900)
 
     def test_provider_temporary_outage_defers_without_false_completion(self):
         self.assertIsNotNone(model_quota_retry_seconds({
