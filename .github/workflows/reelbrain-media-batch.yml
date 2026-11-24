@@ -32,6 +32,9 @@ jobs:
       REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED: '1'
       REELBRAIN_MEDIA_ACQUISITION: 'yt_dlp_public'
       REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD: '1'
+      # Optional private Netscape cookies.txt, encoded as base64.
+      # Do not use a repository variable or commit cookies to git.
+      REELBRAIN_INSTAGRAM_COOKIES_B64: ${{ secrets.REELBRAIN_INSTAGRAM_COOKIES_B64 }}
       # Free open-source CPU speech fallback (downloaded/cached on demand).
       REELBRAIN_ENABLE_LOCAL_ASR: '1'
       REELBRAIN_LOCAL_ASR_MODEL: 'small'
