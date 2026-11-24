@@ -44,7 +44,8 @@ def _valid_media(path: Path, max_bytes: int) -> bool:
 
 
 def acquire_public_reel(url: str, output_directory: str | Path, *, max_bytes: int = 100 * 1024 * 1024,
-                        timeout_seconds: int = 210, runner=None) -> Path:
+                        timeout_seconds: int = 210, runner=None,
+                        cookies_file: Path | None = None) -> Path:
     """Download exactly one public Reel into a private temporary directory.
 
     Requires explicit caller authorization and media-use rights; this adapter
@@ -59,6 +60,10 @@ def acquire_public_reel(url: str, output_directory: str | Path, *, max_bytes: in
     root = Path(output_directory)
     if root.is_symlink() or not root.exists() or not root.is_dir():
         raise PublicMediaError('Output directory is not a safe existing directory')
+    if cookies_file is not None:
+        cookie = Path(cookies_file)
+        if cookie.is_symlink() or not cookie.is_file() or (cookie.stat().st_mode & 0o077):
+            raise PublicMediaError('Session file missing or insufficiently private')
     shortcode = canonical.rstrip('/').rsplit('/', 1)[-1]
     target = root / f'{shortcode}.mp4'
     if target.exists() or target.is_symlink():
@@ -73,6 +78,10 @@ def acquire_public_reel(url: str, output_directory: str | Path, *, max_bytes: in
         '--merge-output-format', 'mp4', '--output', str(root / (shortcode + '.%(ext)s')),
         canonical,
     ]
+    if cookies_file is not None:
+        # Session is supplied by the owner through a PRIVATE GitHub secret,
+        # never browser auto-import; do not log the path or credential bytes.
+        cmd[1:1] = ['--cookies', str(cookies_file)]
     try:
         run = runner or subprocess.run
         result = run(cmd, capture_output=True, text=True, timeout=timeout_seconds,
