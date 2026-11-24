@@ -3,7 +3,7 @@
  * sender conversations; persists no raw private message texts or access tokens.
  * Can still report needs_review if Graph omits Reel attachments.
  */
-import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations } from './core.mjs';
+import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations, buildReceiptRecheck } from './core.mjs';
 const env=(k:string)=>Deno.env.get(k)?.trim()||'';
 const base=env('SUPABASE_URL').replace(/\/$/,'');
 const role=env('SUPABASE_SERVICE_ROLE_KEY');
@@ -53,8 +53,8 @@ Deno.serve(async req=>{
    const sender=String(user.sender_id||'');if(!/^[0-9]{3,32}$/.test(sender)||sender===professional)continue;
    let checked=0,newSaved=0,unavailable=false,reason:string|null=null;
    try{
-     const history=await db('reelbrain_dm_receipts?select=message_id&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
-     const already=new Set((Array.isArray(history)?history:[]).map((x:any)=>String(x.message_id||'')));
+     const history=await db('reelbrain_dm_receipts?select=message_id,status&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
+     const recheck=buildReceiptRecheck(history,2);
      const session=await resolvePageSession(graph,token,professional);
      const conv=await listApprovedConversations(graph,session,sender);
      const threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];
@@ -73,14 +73,14 @@ Deno.serve(async req=>{
        const items=Array.isArray(listing?.data)?listing.data:[];
        for(const item of items){
          if(events.length>=8)break;
-         const mid=String(item?.id||'');if(!ident(mid) || already.has(mid))continue;
-         if(!datesAreRecent(item?.created_time))continue;
+         const mid=String(item?.id||'');if(!ident(mid)||!datesAreRecent(item?.created_time)||!recheck.take(mid))continue;
          let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'},session.token).catch(()=>null);
          if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'},session.token).catch(()=>null);}
          if(!detail) {unavailable=true;reason='graph_message_detail_unavailable';continue;}
          if(!datesAreRecent(detail.created_time)||String(detail.from?.id)!==sender)continue;
          // No private message string persists; only canonical URL, attachment type, Meta mid.
-         events.push(...reelEventsFromGraph([detail],sender,professional));
+         const extracted=reelEventsFromGraph([detail],sender,professional);
+         events.push(...(recheck.isReview(mid)?extracted.filter((e:any)=>e.status==='queued'):extracted));
          checked++;
        }
      }
