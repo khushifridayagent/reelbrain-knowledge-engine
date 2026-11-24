@@ -56,7 +56,13 @@ class ApifyReelClient:
             if obj.get(field):
                 try:observed=canonicalize_instagram(str(obj[field]))
                 except InvalidSource as e:raise AcquisitionError('provider identity malformed') from e
-                if observed!=canon:raise AcquisitionError('provider permalink mismatch')
+                # The official Reel actor documents that its canonical
+                # output URL can be /p/<shortcode>/ even when the input is
+                # /reel/<shortcode>/. Preserve the original Reel URL, and
+                # verify the media's stable shortcode rather than the alias.
+                observed_code=observed.rstrip('/').rsplit('/',1)[-1]
+                if observed_code!=shortcode:
+                    raise AcquisitionError('provider permalink shortcode mismatch')
         if obj.get('error'):
             raise AcquisitionError('provider reported inaccessible reel')
         media_url=obj.get('videoUrl') if isinstance(obj.get('videoUrl'),str) else None
