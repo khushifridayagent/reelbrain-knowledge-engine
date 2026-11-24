@@ -244,6 +244,6 @@ class LocalPipelineEngine:
             saved['processing_receipt_id']=receipt
             saved['media_sha256']=sha.hexdigest()
         saved.update({'stage_errors':errors,'stage_timings_ms':measurements,'stage_observations':{**{k:len(v) for k,v in results.items()},'provided':len(extra)},'external_calls':external_count,'media_is_local':True,
-                      'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),
+                      'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),'audio_required':bool(video_assets),
                       'unattempted_modalities':([stage for stage,active in (('asr',self.audio_model is not None),('video_model',self.video_model is not None),('structured_fact_model',self.fact_model is not None)) if not active])})
         return saved
