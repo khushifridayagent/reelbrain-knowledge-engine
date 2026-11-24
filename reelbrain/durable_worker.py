@@ -241,9 +241,11 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                         if lost.is_set():raise RuntimeError('worker lease renewal lost')
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
                 quota_retry=r.get('transient_model_retry_seconds')
-                if r.get('status')=='partial' and quota_retry is None:
-                    quota_retry=3600
-                if r.get('status')=='partial' and isinstance(quota_retry,int) and 900<=quota_retry<=86400:
+                if r.get('status') not in ('partial','evidence_saved'):
+                    raise RuntimeError('Unrecognized persisted media status')
+                if r.get('status')=='partial':
+                    if type(quota_retry) is not int or not 900<=quota_retry<=86400:
+                        quota_retry=3600
                     # Model Neuron/ASR quota exhausted: preserve all saved
                     # evidence, then return the original source to the durable
                     # queue until capacity resets. Do NOT mark partial as
@@ -259,7 +261,7 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                     continue
                 with pg.cursor() as cur:
                     cur.execute('select public.reelbrain_finish_dm_job(%s,%s,%s,%s::jsonb)',
-                                (job_id,token,'partial' if r['status']=='partial' else 'processed',json.dumps(r)))
+                                (job_id,token,'processed',json.dumps(r)))
                     ok=cur.fetchone()[0]
                 pg.commit()
                 if not ok:raise RuntimeError('lost lease while finalizing durable job')
@@ -269,6 +271,8 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                 seconds_to_wait=access_backoff_seconds(exc)
                 pg.rollback()
                 reason=type(exc).__name__+': media worker stage incomplete'
+                if seconds_to_wait is not None:
+                    reason=type(exc).__name__+': '+str(exc)[:300]
                 with pg.cursor() as cur:
                     if seconds_to_wait is not None:
                         # A datacenter 403/429 must not burn a Reel's finite
