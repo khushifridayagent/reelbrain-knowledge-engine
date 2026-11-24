@@ -27,9 +27,10 @@ Important: the uploaded TinyFish report assumes a *different implementation*
 
 ## What is actually missing for source audiovisual knowledge
 
-Six Reels are still queued and six knowledge rows `media_pending`;
-metadata and exact creator captions are saved but no genuine video/ASR/OCR
-observations are stored. GitHub media downloading continues to encounter
+Six Reels remain queued for the *separate original-media visual/OCR pass*.
+All six now have independent URL-first TranscriptFetch audio transcripts with
+provider timestamps stored in Postgres (real run #45384096213 finished four
+more); first-party video/OCR observations are still not established. GitHub media downloading continues to encounter
 Instagram anonymous datacenter 403/429, so **the model is not the primary
 blocker**. Cloudflare Whisper and Qwen Vision cannot analyze source data they
 never receive. Do not claim verified speech from a creator caption.
