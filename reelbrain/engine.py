@@ -111,6 +111,7 @@ class LocalPipelineEngine:
                     locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
                     observations.append(Observation(ev.text,kind=ev.kind,locator=locator,confidence=ev.confidence))
             return observations
+        visual_coverage_gaps=[]
         def video_understanding():
             from .qwen_vl import QwenPartialVisualError
             observations=[]
@@ -127,6 +128,11 @@ class LocalPipelineEngine:
                             locator=locator,confidence=ev.confidence))
                 try:
                     add_results(self.video_model.analyze(asset))
+                    stats=getattr(self.video_model,'sampling_stats',None)
+                    if isinstance(stats,dict) and stats.get('partial_scan'):
+                        visual_coverage_gaps.append(
+                            f"asset:{idx:02d}:sampled:{int(stats.get('selected_scenes') or 0)}"
+                            f":candidate:{int(stats.get('candidate_scenes') or 0)}")
                 except Exception as exc:
                     partial=getattr(exc,'partial_observations',None)
                     if isinstance(partial,list):
@@ -172,6 +178,10 @@ class LocalPipelineEngine:
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
         if slide_failures:
             errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
+        if visual_coverage_gaps:
+            # 32 selected scenes do not mean every fast-changing visual state
+            # was understood. Keep the correct partial status for follow-up.
+            errors['visual_coverage']='Qwen scene sample budget left gaps: '+','.join(visual_coverage_gaps[:20])
         extra=list(extra_observations or [])
         if not all(isinstance(ev,Observation) and ev.kind in ('caption','asr','manual','document') for ev in extra):
             raise ValueError('external observations must be typed source evidence, not model output')
