@@ -75,7 +75,18 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                             os.environ['GROQ_API_KEY'],
                             os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
                             'https://api.groq.com'))
-                    if os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
+                    # Prefer the ready-hosted Cloudflare vision model when
+                    # explicitly configured; never auto-spend external credits.
+                    from .cloudflare_vision_config import cloudflare_qwen_config
+                    cloudflare_vision=cloudflare_qwen_config()
+                    if cloudflare_vision:
+                        from .qwen_vl import QwenVLResearcher
+                        vlm=QwenVLResearcher(
+                            cloudflare_vision['base_url'],
+                            model=cloudflare_vision['model'],
+                            api_key=cloudflare_vision['api_key'],
+                            max_frames=8)
+                    elif os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
                         from .qwen_vl import QwenVLResearcher
                         vlm=QwenVLResearcher(
                             os.environ['REELBRAIN_QWEN_VL_BASE_URL'],

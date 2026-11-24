@@ -34,6 +34,10 @@ jobs:
       REELBRAIN_HOSTED_TRANSCRIPT_ENABLED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_ENABLED || '0' }}
       REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED || '0' }}
       REELBRAIN_TRANSCRIPT_API_KEY: ${{ secrets.REELBRAIN_TRANSCRIPT_API_KEY }}
+      # URL-first transcript provider: choose 'scrapecreators' (default) or
+      # 'transcriptfetch'; both require the same TWO explicit opt-in variables.
+      REELBRAIN_HOSTED_TRANSCRIPT_PROVIDER: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_PROVIDER || 'scrapecreators' }}
+      TRANSCRIPTFETCH_API_KEY: ${{ secrets.TRANSCRIPTFETCH_API_KEY }}
       REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED: '1'
       REELBRAIN_MEDIA_ACQUISITION: ${{ vars.REELBRAIN_MEDIA_ACQUISITION || 'yt_dlp_public' }}
       REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD: '1'
@@ -47,6 +51,11 @@ jobs:
       # and explicit opt-in; repository secrets never enter GitHub code.
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Optional Cloudflare-hosted Qwen 3.8 vision: no local GPU host,
+      # never called without external-model upload and owner vision opt-in.
+      REELBRAIN_CLOUDFLARE_VISION_ENABLED: ${{ vars.REELBRAIN_CLOUDFLARE_VISION_ENABLED || '0' }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
       REELBRAIN_QWEN_VL_BASE_URL: ${{ secrets.REELBRAIN_QWEN_VL_BASE_URL }}
       REELBRAIN_QWEN_VL_API_KEY: ${{ secrets.REELBRAIN_QWEN_VL_API_KEY }}
       REELBRAIN_QWEN_VL_MODEL: ${{ vars.REELBRAIN_QWEN_VL_MODEL || 'Qwen/Qwen3-VL-8B-Instruct' }}
