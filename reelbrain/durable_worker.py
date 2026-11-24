@@ -227,6 +227,11 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                     lease_token=null,lease_until=null,available_at=now(),
                     updated_at=now(),last_error='Previous runner lease expired; resume pending stages'
                 where status='leased' and lease_until<now()""")
+            from .resumable_media import RECOVERABLE_TERMINAL_SQL
+            cur.execute("""update public.reelbrain_dm_jobs
+                set status='queued',attempts=least(attempts,greatest(0,max_attempts-1)),
+                    lease_token=null,lease_until=null,available_at=now(),updated_at=now()
+                where """+RECOVERABLE_TERMINAL_SQL)
             cur.execute('select id,source_url,lease_token from public.reelbrain_claim_dm_jobs(%s,%s)',(min(10,max(1,batch_size)),900))
             claimed=cur.fetchall()
         pg.commit()
