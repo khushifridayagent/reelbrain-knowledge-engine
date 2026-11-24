@@ -174,6 +174,7 @@ class QwenVLResearcher:
             # use both only for that verified provider.
             if (self.model.startswith('@cf/qwen/') and
                     self.url.startswith('https://api.cloudflare.com/')):
+                body.pop('max_tokens',None)
                 body.update({
                     'reasoning_effort':'low',
                     'response_format':{'type':'json_object'},
@@ -189,6 +190,9 @@ class QwenVLResearcher:
                     raise QwenPartialVisualError('quota exceeded',retained)
                 if code in (502,503,504):
                     raise QwenPartialVisualError('service unavailable',retained)
+                if code>=400:
+                    from .resumable_media import classify_model_http
+                    raise QwenPartialVisualError(classify_model_http(code),retained)
                 response.raise_for_status()
                 content=response.json()['choices'][0]['message']['content']
                 if isinstance(content,list):
