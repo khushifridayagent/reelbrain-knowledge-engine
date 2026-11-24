@@ -8,6 +8,8 @@ OCR/QR source evidence. Bound batches to the GitHub runner and model quota.
 from __future__ import annotations
 
 import base64
+import hashlib
+import time
 import ipaddress
 import json
 import math
@@ -85,7 +87,7 @@ class QwenVLResearcher:
         if not ok:raise RuntimeError('Could not encode a sampled visual frame')
         return label,payload.tobytes()
 
-    def _sample(self,path:Path)->list[tuple[str,bytes]]:
+    def _sample(self,path:Path,*,all_scenes=False,window_start=0.0)->list[tuple[str,bytes]]:
         import cv2
         import numpy as np
         from .keyframes import dhash, hamming
@@ -109,12 +111,12 @@ class QwenVLResearcher:
             total=float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             if not math.isfinite(fps) or fps<=0:fps=25
             duration=total/fps if total>0 else 180.0
-            scan_until=min(duration,300.0)
+            scan_until=min(duration,window_start+300.0)
             # Seek to ~2 fps for scene coverage; the separate QR/Tesseract
             # passes scan faster for transient links and short-lived words.
-            times=np.arange(0,scan_until,0.5).tolist()
-            if duration>0 and duration<300:
-                times.append(max(0.0,duration-0.08))
+            times=np.arange(window_start,scan_until,0.5).tolist()
+            if duration>window_start and duration<=scan_until:
+                times.append(max(window_start,duration-0.08))
             candidates=[]
             prev_hash=prev_gray=None
             last_t=-100.0
@@ -137,7 +139,7 @@ class QwenVLResearcher:
             if not candidates:raise RuntimeError('No video frames decoded')
         finally:cap.release()
         budget=self.max_frames*self.max_batches
-        if len(candidates)>budget:
+        if not all_scenes and len(candidates)>budget:
             ids=([0] if budget==1 else sorted({round(i*(len(candidates)-1)/(budget-1))
                         for i in range(budget)}))
             selected=[candidates[index] for index in ids]
@@ -145,8 +147,8 @@ class QwenVLResearcher:
             selected=candidates
         self.sampling_stats={'kind':'video','candidate_scenes':len(candidates),
                              'selected_scenes':len(selected),
-                             'duration_seconds':duration,
-                             'partial_scan':bool(duration>300 or len(selected)<len(candidates))}
+                             'duration_seconds':duration,'window_end_seconds':scan_until,
+                             'partial_scan':bool(duration>scan_until or len(selected)<len(candidates))}
         return selected
 
     @staticmethod
@@ -159,12 +161,45 @@ class QwenVLResearcher:
             raise ValueError('Unstructured Qwen observations')
         return entries
 
-    def analyze(self,path:Path)->list[Observation]:
+    def _batches(self,path,checkpoint):
+        window_start=0.0
+        while True:
+            frames=(self._sample(path,all_scenes=True,window_start=window_start)
+                    if checkpoint is not None else self._sample(path))
+            stats=dict(self.sampling_stats)
+            for start in range(0,len(frames),self.max_frames):
+                yield frames[start:start+self.max_frames]
+            if checkpoint is None or stats.get('kind')!='video':
+                break
+            end=stats.get('window_end_seconds',0)
+            if end>=stats.get('duration_seconds',0):
+                break
+            if end<=window_start:raise RuntimeError('Visual scan window did not advance')
+            window_start=end
+        if checkpoint is not None:self.sampling_stats['partial_scan']=False
+
+    def _batch_key(self,asset_index,batch):
+        digest=hashlib.sha256()
+        digest.update((self.model+'|'+self.PROMPT+'|'+str(asset_index)).encode())
+        for label,raw in batch:
+            digest.update(label.encode()+b'\\x00'+hashlib.sha256(raw).digest())
+        return 'vlm-batch:'+digest.hexdigest()
+
+    def analyze(self,path:Path,*,checkpoint=None,asset_index=0)->list[Observation]:
         import httpx
-        frames=self._sample(Path(path))
         retained=[]
-        for batch_no,start in enumerate(range(0,len(frames),self.max_frames),1):
-            batch=frames[start:start+self.max_frames]
+        new_batches=0
+        for batch_no,batch in enumerate(self._batches(Path(path),checkpoint),1):
+            unit=self._batch_key(asset_index,batch) if checkpoint is not None else None
+            if checkpoint is not None:
+                cached=checkpoint.load('vlm',unit=unit)
+                if cached is not None:
+                    retained.extend(cached[0])
+                    continue
+                if new_batches>=self.max_batches:
+                    raise QwenPartialVisualError('visual coverage pending: resume checkpointed batches',retained)
+            new_batches+=1
+            began=time.monotonic()
             listing='; '.join(f'frame:{i} @ {label}' for i,(label,_) in enumerate(batch))
             contents=[{'type':'text','text':self.PROMPT+'\nFrames: '+listing}]
             for _label,raw in batch:
@@ -238,4 +273,6 @@ class QwenVLResearcher:
                 # Real upstream errors can contain secret tokens/URLs; never
                 # persist or log their raw repr or response body.
                 raise QwenPartialVisualError('visual model request failed',retained) from None
+            if checkpoint is not None:
+                checkpoint.save('vlm',retained[previous_count:],int((time.monotonic()-began)*1000),unit=unit)
         return retained
