@@ -166,3 +166,31 @@ def acquire_meta_bundle(
     finally:
         # Only our own client should be closed; caller may share injected fake.
         if download_http is None and hasattr(http,'close'):http.close()
+
+
+def acquire_with_meta_fallback(url:str,output_directory:Path|str,pg,*,cookies_file=None,
+                               public_fetch=None,meta_fetch=None)->PublicBundle:
+    """Attempt existing public extractor first, then approved official Graph.
+
+    If Graph access isn't configured, it incurs ZERO extra network calls and
+    yields the original sanitized downloader error for durable queue deferral.
+    """
+    from .public_bundle import acquire_public_bundle
+    fetch=public_fetch or acquire_public_bundle
+    try:
+        return fetch(url,output_directory,cookies_file=cookies_file)
+    except PublicMediaError:
+        if not meta_fallback_enabled():
+            raise
+    with pg.cursor() as cur:
+        cur.execute("""SELECT creator_handle
+            FROM public.reelbrain_reel_knowledge WHERE source_url=%s LIMIT 1""",
+            (canonicalize_instagram(url),))
+        creator=cur.fetchone()
+    if not creator or not creator[0]:
+        raise MetaMediaUnavailable('Public media unavailable: source creator identity missing')
+    acquire=meta_fetch or acquire_meta_bundle
+    return acquire(url,str(creator[0]),
+        os.environ['REELBRAIN_META_GRAPH_TOKEN'],
+        os.environ['REELBRAIN_META_IG_USER_ID'],
+        output_directory)
