@@ -56,7 +56,7 @@ class LocalPipelineEngine:
 
     def ingest(self,media_path:str|Path|list[Path]|tuple[Path,...],source_url:str,
                tenant:str='personal',allow_external:bool=False,
-               extra_observations:list[Observation]|None=None)->dict:
+               extra_observations:list[Observation]|None=None,checkpoint=None)->dict:
         """Ingest a single video or a full 1–20-page mixed carousel.
 
         Each slide keeps its own evidence locator; one canonical source and
@@ -143,6 +143,7 @@ class LocalPipelineEngine:
                     category='quota exceeded' if 'quota' in str(exc).lower() else (
                         'service unavailable' if 'unavailable' in str(exc).lower()
                         else 'visual model request failed')
+                    if isinstance(exc,QwenPartialVisualError):category=str(exc)
                     raise QwenPartialVisualError(category,observations) from None
             return observations
         tasks={'ocr':read_all_pages}
@@ -153,7 +154,13 @@ class LocalPipelineEngine:
             start=time.monotonic()
             try:return func(),int((time.monotonic()-start)*1000)
             except Exception:raise
-        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        if checkpoint:
+            for label in list(tasks):
+                cached=checkpoint.load(label)
+                if cached is not None:
+                    results[label],measurements[label]=cached
+                    del tasks[label]
+        with ThreadPoolExecutor(max_workers=max(1,len(tasks))) as pool:
             pending={pool.submit(timed,label,fn):label for label,fn in tasks.items()}
             for future in as_completed(pending):
                 stage=pending[future]
@@ -176,6 +183,9 @@ class LocalPipelineEngine:
                             for ev in partial):
                             results[stage]=partial[:120]
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
+                if checkpoint and stage in results and stage not in errors and not (
+                    (stage=='ocr' and slide_failures) or (stage=='vlm' and visual_coverage_gaps)):
+                    checkpoint.save(stage,results[stage],measurements[stage])
         if slide_failures:
             errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
         if visual_coverage_gaps:
