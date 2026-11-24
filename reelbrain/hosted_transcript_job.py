@@ -117,9 +117,12 @@ def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_fact
     """
     if not hosted_transcript_enabled():
         return {'status':'disabled','requests_sent':0}
-    db_url=db_url or os.environ.get('REELBRAIN_DB_URL','')
-    if not db_url:
-        return {'status':'missing_database','requests_sent':0}
+    # The optional stage must never cross into other user projects.
+    from .durable_worker import checked_config
+    validated=checked_config()['db_url']
+    if db_url is not None and db_url!=validated:
+        raise RuntimeError('Transcript worker must use the isolated Reelbrain database')
+    db_url=validated
     if connection_factory is None:
         from .durable_worker import pg_open
         connection_factory=pg_open
