@@ -112,13 +112,32 @@ class LocalPipelineEngine:
                     observations.append(Observation(ev.text,kind=ev.kind,locator=locator,confidence=ev.confidence))
             return observations
         def video_understanding():
+            from .qwen_vl import QwenPartialVisualError
             observations=[]
             for idx,asset in enumerate(media_assets,1):
-                # Image-capable VLM adapters may interpret static carousel pages
-                # as well as video clips. Models return inferences, never proof.
-                for ev in self.video_model.analyze(asset):
-                    locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
-                    observations.append(Observation(ev.text,kind='model_inference',locator=locator,confidence=ev.confidence))
+                # Every static carousel slide gets its own visual pass; no
+                # hallucination from speech can stand in for missing pages.
+                def add_results(events):
+                    for ev in events:
+                        if not isinstance(ev,Observation):
+                            raise TypeError('Visual model returned an invalid observation')
+                        locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
+                        observations.append(Observation(
+                            ev.text,kind='model_inference',
+                            locator=locator,confidence=ev.confidence))
+                try:
+                    add_results(self.video_model.analyze(asset))
+                except Exception as exc:
+                    partial=getattr(exc,'partial_observations',None)
+                    if isinstance(partial,list):
+                        add_results(partial)
+                    # VLM over-quota after a page MUST NOT wipe earlier
+                    # successful image inferences, nor independently decoded
+                    # source OCR/QR evidence. Never leak raw provider errors.
+                    category='quota exceeded' if 'quota' in str(exc).lower() else (
+                        'service unavailable' if 'unavailable' in str(exc).lower()
+                        else 'visual model request failed')
+                    raise QwenPartialVisualError(category,observations) from None
             return observations
         tasks={'ocr':read_all_pages}
         if self.audio_model is not None and video_assets:tasks['asr']=transcribe_all
