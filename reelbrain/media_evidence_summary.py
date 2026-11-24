@@ -48,6 +48,7 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
         'processing_stage': 'partial_media' if media_processed else 'media_pending',
         'content': {
             'media_accessed': media_processed,
+            'hosted_audio_reused': result.get('hosted_audio_reused') if result.get('hosted_audio_reused') in ('transcriptfetch','scrapecreators') else None,
             'source_observations': source,
             'model_inferences': model,
             'source_id': str(result.get('source_id') or '')[:200],
