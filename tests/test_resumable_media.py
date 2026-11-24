@@ -55,3 +55,33 @@ class ResumableMediaTests(unittest.TestCase):
             return [{'id':job,'status':'processed'}]
         result=drain_overlapping({},max_jobs=2,process_batch=worker,time_remaining=lambda:10000)
         self.assertEqual({x['id'] for x in result},{1,2})
+
+    def test_checkpoint_reuses_completed_pass_not_failed_pass(self):
+        from tempfile import TemporaryDirectory
+        from reelbrain.engine import LocalPipelineEngine
+        from reelbrain.store import KnowledgeStore
+        from reelbrain.contracts import Observation
+        from unittest.mock import Mock
+        class Cache:
+            def __init__(self):self.data={}
+            def load(self,stage):return self.data.get(stage)
+            def save(self,stage,events,elapsed):self.data[stage]=(events,elapsed)
+        cache=Cache()
+        ocr=Mock(return_value=[Observation('Exact visible text',kind='ocr',locator='00:01')])
+        vision=Mock()
+        vision.requires_external=False
+        vision.analyze.side_effect=[RuntimeError('unavailable'),[Observation('Visual details',kind='model_inference',locator='00:01')]]
+        with TemporaryDirectory() as d:
+            p=Path(d)/'sample.png'
+            p.write_bytes(b'fixture')
+            db=KnowledgeStore(Path(d)/'evidence.sqlite')
+            try:
+                engine=LocalPipelineEngine(db,ocr=ocr,video_model=vision)
+                url='https://www.instagram.com/reel/ABC123/'
+                first=engine.ingest(p,url,checkpoint=cache)
+                second=engine.ingest(p,url,checkpoint=cache)
+                self.assertEqual(first['status'],'partial')
+                self.assertEqual(second['status'],'evidence_saved')
+                self.assertEqual(ocr.call_count,1)
+                self.assertEqual(vision.analyze.call_count,2)
+            finally:db.close()
