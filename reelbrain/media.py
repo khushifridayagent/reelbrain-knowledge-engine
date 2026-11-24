@@ -47,7 +47,11 @@ def recognize_image(path:str|Path, locator:str='image:1')->list[Observation]:
             text=max(output,key=lambda raw:(len(candidate_urls(raw)),len(raw)))
     except (OSError,ValueError) as exc:
         raise MediaError('Unreadable image or failed OCR normalization') from exc
-    return [Observation(text,kind='ocr',locator=locator)] if text else []
+    from .qr_evidence import read_qr_image
+    # QR is independent of visible plain text: a post can contain only a QR
+    # without any URL readable by Tesseract. Preserve both source modalities.
+    qr_observations=read_qr_image(p,locator=locator)
+    return ([Observation(text,kind='ocr',locator=locator)] if text else []) + qr_observations
 
 def analyze_video(path:str|Path,frame_rate:float=4.,max_seconds:float=180.,max_ocr_frames:int=120, scene_threshold:float=8.)->tuple[list[Observation],dict]:
     """Decode at <=4fps; OCR time anchors at 1fps and frames with large visual changes.
