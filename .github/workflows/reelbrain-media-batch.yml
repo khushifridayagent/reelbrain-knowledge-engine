@@ -25,8 +25,8 @@ jobs:
     # An absent variable no longer blocks processing after the secret exists.
     if: ${{ vars.REELBRAIN_WORKER_ENABLED != '0' }}
     runs-on: ubuntu-24.04
-    # Lower than the database lease (15 min) to avoid running after expiry.
-    timeout-minutes: 14
+    # Worker renews ownership while processing; hard platform ceiling is not a Reel deadline.
+    timeout-minutes: 60
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
       # URL-first spoken ASR, always budget-gated. TranscriptFetch checks
@@ -206,12 +206,11 @@ jobs:
         run: |
           python - <<'PY'
           from reelbrain.durable_worker import checked_config
-          from reelbrain.queue_drain import drain_ready_queue
+          from reelbrain.resumable_media import drain_overlapping
           from reelbrain.batch_outcome import require_successful_batch
-          # Queue draining is bounded to four serial claims and an 11-minute
-          # pre-claim time budget (job timeout 14m; Postgres leases 15m).
+          # Two independent workers overlap media processing; each renews its lease.
           # All media is transient and observations go to dedicated Postgres.
-          result = drain_ready_queue(checked_config(), max_jobs=4)
+          result = drain_overlapping(checked_config(), max_jobs=4)
           print('Claimed jobs:', len(result))
           print('Outcomes:', [item['status'] for item in result])
           # Retry/defer ACK does NOT count as actual Reel extraction success.
