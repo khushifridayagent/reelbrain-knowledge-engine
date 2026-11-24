@@ -14,7 +14,7 @@ class MediaSummaryTests(unittest.TestCase):
         self.assertTrue(out['video_analyzed'])
         self.assertTrue(out['audio_transcribed'])
         self.assertTrue(out['ocr_analyzed'])
-        self.assertEqual(out['processing_stage'],'partial_media')
+        self.assertEqual(out['processing_stage'],'completed')
         self.assertEqual(len(out['content']['source_observations']),2)
         self.assertEqual(len(out['content']['model_inferences']),1)
         self.assertIn('00:01.20',[x['locator'] for x in out['content']['source_observations']])
@@ -41,5 +41,27 @@ class MediaSummaryTests(unittest.TestCase):
         self.assertLessEqual(len(out['content']['source_observations']),80)
         self.assertLessEqual(len(out['content']['source_observations'][0]['text']),4000)
         self.assertLessEqual(len(out['content']['source_observations'][0]['locator']),64)
+
+    def test_hosted_audio_with_required_visual_pass_can_complete(self):
+        events=[{'kind':'ocr','locator':'00:01','verbatim':'Visible text'},
+                {'kind':'model_inference','locator':'00:01','verbatim':'Visual explanation'}]
+        base={'media_processed':True,'status':'evidence_saved',
+              'stage_observations':{'ocr':1,'vlm':1},'stage_errors':{},
+              'unattempted_modalities':['asr','structured_fact_model'],
+              'audio_required':True}
+        self.assertEqual(build_media_summary(events,base)['processing_stage'],'partial_media')
+        good={**base,'hosted_audio_reused':'transcriptfetch'}
+        self.assertEqual(build_media_summary(events,good)['processing_stage'],'completed')
+        bad={**good,'stage_errors':{'vlm':'quota exceeded'}}
+        self.assertEqual(build_media_summary(events,bad)['processing_stage'],'partial_media')
+        bad={**good,'stage_observations':{'ocr':1,'vlm':0}}
+        self.assertEqual(build_media_summary(events,bad)['processing_stage'],'partial_media')
+
+    def test_ocr_volume_cannot_hide_visual_summary(self):
+        events=[{'kind':'ocr','locator':str(i),'verbatim':'OCR '+str(i)} for i in range(300)]
+        events.append({'kind':'model_inference','locator':'00:02','verbatim':'Visual inference'})
+        out=build_media_summary(events,{'media_processed':True,'stage_observations':{'ocr':300,'vlm':1}})
+        self.assertEqual(len(out['content']['source_observations']),80)
+        self.assertEqual(len(out['content']['model_inferences']),1)
 
 if __name__=='__main__':unittest.main()

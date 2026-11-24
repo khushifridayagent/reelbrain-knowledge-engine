@@ -3,7 +3,7 @@
  * sender conversations; persists no raw private message texts or access tokens.
  * Can still report needs_review if Graph omits Reel attachments.
  */
-import { inspectParticipantIds, reelEventsFromGraph } from './core.mjs';
+import { inspectParticipantIds, reelEventsFromGraph, linkedPageId, graphErrorCategory, validGraphId } from './core.mjs';
 const env=(k:string)=>Deno.env.get(k)?.trim()||'';
 const base=env('SUPABASE_URL').replace(/\/$/,'');
 const role=env('SUPABASE_SERVICE_ROLE_KEY');
@@ -12,7 +12,7 @@ const professional=env('META_IG_PROFESSIONAL_ID');
 const json=(d:unknown,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
 const headers=()=>({'apikey':role,'authorization':'Bearer '+role,'content-type':'application/json'});
 const digest=async(text:string)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(x=>x.toString(16).padStart(2,'0')).join('');
-const ident=(x:string)=>/^[A-Za-z0-9_-]{5,180}$/.test(x);
+const ident=validGraphId;
 async function db(path:string,options:RequestInit={}){
  const r=await fetch(base+'/rest/v1/'+path,{...options,headers:{...headers(),...(options.headers as Record<string,string>||{})},signal:AbortSignal.timeout(7000)});
  if(!r.ok)throw new Error('db_http_'+r.status);
@@ -23,7 +23,7 @@ async function graph(path:string,params:Record<string,string>={},ms=7000):Promis
  for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
  const r=await fetch(url,{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(ms)});
  const result=await r.json().catch(()=>null);
- if(!r.ok || !result || typeof result!=='object')throw new Error('graph_http_'+r.status);
+ if(!r.ok || !result || typeof result!=='object' || result.error)throw new Error(graphErrorCategory(r.status,result));
  return result;
 }
 function datesAreRecent(value:unknown):boolean{
@@ -51,22 +51,27 @@ Deno.serve(async req=>{
  if(filtered.length!==1)return json({error:'one_sender_target_required'},400);
  for(const user of filtered){
    const sender=String(user.sender_id||'');if(!/^[0-9]{3,32}$/.test(sender)||sender===professional)continue;
-   let checked=0,newSaved=0,unavailable=false;
+   let checked=0,newSaved=0,unavailable=false,reason:string|null=null;
    try{
      const history=await db('reelbrain_dm_receipts?select=message_id&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
      const already=new Set((Array.isArray(history)?history:[]).map((x:any)=>String(x.message_id||'')));
-     let conv=await graph(encodeURIComponent(professional)+'/conversations',{platform:'instagram',user_id:sender,limit:'5'});
+     const identity=await graph('me',{fields:'id,instagram_business_account{id}'});
+     const page=linkedPageId(identity,professional);
+     if(!page)throw new Error('meta_token_not_linked_page');
+     let conv=await graph(encodeURIComponent(page)+'/conversations',{platform:'instagram',user_id:sender,limit:'5'});
      let threads=Array.isArray(conv.data)?conv.data.slice(0,5):[];
-     if(!threads.length){conv=await graph(encodeURIComponent(professional)+'/conversations',{platform:'instagram',limit:'15'});threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];}
+     if(!threads.length){conv=await graph(encodeURIComponent(page)+'/conversations',{platform:'instagram',limit:'15'});threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];}
      const events:any[]=[];
      for(const thread of threads){
        if(!ident(String(thread.id||'')) || events.length>=8)continue;
        const tid=encodeURIComponent(thread.id);
        const details=await graph(tid,{fields:'participants,updated_time'}).catch(()=>null);
-       if(!details || !Array.isArray(details.participants?.data) || details.participants.data.length!==2 ||
+       if(!details){unavailable=true;reason='graph_conversation_detail_unavailable';continue;}
+       if(!Array.isArray(details.participants?.data) || details.participants.data.length!==2 ||
            !inspectParticipantIds(details.participants,sender,professional))continue;
        if(!datesAreRecent(details.updated_time))continue;
-       const listing=await graph(tid+'/messages',{limit:'35'}).catch(()=>null);
+       const listing=await graph(tid+'/messages',{limit:'20'}).catch(()=>null);
+       if(!listing){unavailable=true;reason='graph_message_listing_unavailable';continue;}
        const items=Array.isArray(listing?.data)?listing.data:[];
        for(const item of items){
          if(events.length>=8)break;
@@ -74,7 +79,7 @@ Deno.serve(async req=>{
          if(!datesAreRecent(item?.created_time))continue;
          let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'}).catch(()=>null);
          if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'}).catch(()=>null);}
-         if(!detail) {unavailable=true;continue;}
+         if(!detail) {unavailable=true;reason='graph_message_detail_unavailable';continue;}
          if(!datesAreRecent(detail.created_time)||String(detail.from?.id)!==sender)continue;
          // No private message string persists; only canonical URL, attachment type, Meta mid.
          events.push(...reelEventsFromGraph([detail],sender,professional));
@@ -88,13 +93,14 @@ Deno.serve(async req=>{
        linkedReels+=result?.reel_links_seen||0;
        newSaved=result?.new_receipts||0;
      }
-   }catch(e){unavailable=true;errors++;console.error('reelbrain_reconcile_sender_failed',String((e as Error).message).slice(0,50));}
+   }catch(e){unavailable=true;const msg=String((e as Error).message);reason=/^(graph_http_\d+(?:_code_\d+)?(?:_sub_\d+)?|meta_token_not_linked_page|db_http_\d+)$/.test(msg)?msg:'graph_or_network_unavailable';console.error('reelbrain_reconcile_sender_failed',reason);}
+   if(unavailable)errors++;
    examined+=checked;
    try{
     await db('reelbrain_dm_reconciliation_state?on_conflict=sender_igsid',{
      method:'POST',headers:{prefer:'resolution=merge-duplicates,return=minimal'},
      body:JSON.stringify({sender_igsid:sender,last_checked_at:new Date().toISOString(),last_new_receipts:newSaved,
-       last_error:unavailable?'partial_graph_history_unavailable':null})
+       last_error:unavailable?(reason||'partial_graph_history_unavailable'):null})
     });
    }catch{errors++;}
  }

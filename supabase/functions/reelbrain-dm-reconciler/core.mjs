@@ -40,7 +40,22 @@ export function reelEventsFromGraph(items,sender,professional){
   const attachments=Array.isArray(item.attachments)?item.attachments:(Array.isArray(item.attachments?.data)?item.attachments.data:[]);
   const kinds=attachments.slice(0,20).map(x=>String(x?.type||'unknown').slice(0,50));
   const suspect=kinds.length>0||!!item.shares||!!item.share||/(?:instagram|reel|https?:\/\/|www\.)/i.test(String(item.message||''));
-  output.push({sid:String(sender),mid:id,urls:[...urls],status:urls.size?'queued':'needs_review',attachment_types:kinds});
+  output.push({sid:String(sender),mid:id,urls:[...urls],status:urls.size?'queued':suspect?'needs_review':'no_reel_link',attachment_types:kinds});
  }
  return output;
+}
+export function validGraphId(value){
+ return typeof value==='string' && /^[A-Za-z0-9_.:-]{5,256}$/.test(value);
+}
+export function linkedPageId(payload,professional){
+ const id=String(payload?.id||'');
+ return /^[0-9]{3,32}$/.test(id) &&
+        id!==String(professional) &&
+        String(payload?.instagram_business_account?.id||'')===String(professional) ? id:null;
+}
+export function graphErrorCategory(status,payload){
+ const code=payload?.error?.code, sub=payload?.error?.error_subcode;
+ return 'graph_http_'+(Number.isInteger(status)?status:0)
+   +(Number.isInteger(code)?'_code_'+code:'')
+   +(Number.isInteger(sub)?'_sub_'+sub:'');
 }
