@@ -89,3 +89,21 @@ export async function listApprovedConversations(graph,session,sender){
  try{return await graph(path,{platform:'instagram',limit:'15'},session.token);}
  catch(e){throw new Error('conversation_list_'+safeGraphFailure(e));}
 }
+
+/** Bounded reconsideration of unresolved receipts; linked receipts are immutable dedup hits. */
+export function buildReceiptRecheck(history,maxReview=2){
+ const known=new Map((Array.isArray(history)?history:[]).map(row=>[String(row.message_id||''),row.status]));
+ const visited=new Set();
+ let reviewCount=0;
+ return {
+  isReview:id=>known.get(id)==='needs_review',
+  take(id){
+   if(visited.has(id))return false;
+   visited.add(id);
+   if(!known.has(id))return true;
+   if(known.get(id)!=='needs_review'||reviewCount>=maxReview)return false;
+   reviewCount++;
+   return true;
+  }
+ };
+}
