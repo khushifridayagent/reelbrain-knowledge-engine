@@ -21,6 +21,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
           python -m pip install -r requirements.txt -r requirements-site.txt -r requirements-web.txt
+      - name: Verify pinned local audio decoder against synthetic WAV
+        run: |
+          python -m pip install --disable-pip-version-check 'faster-whisper==1.2.1' 'av==18.1.0'
+          python - <<'PY'
+          import tempfile,wave
+          from pathlib import Path
+          import av
+          from faster_whisper.audio import decode_audio
+          assert av.__version__ == '18.1.0'
+          with tempfile.TemporaryDirectory() as d:
+              p=Path(d)/'synthetic.wav'
+              with wave.open(str(p),'wb') as w:
+                  w.setnchannels(1);w.setsampwidth(2);w.setframerate(8000)
+                  w.writeframes(b'\x00\x00'*3200)
+              samples=decode_audio(str(p),sampling_rate=16000)
+              assert len(samples)==6400, len(samples)
+              print('LOCAL_ASR_DECODE_OK samples=',len(samples))
+          PY
       - name: Python tests (real network and model calls are not used)
         run: python -m unittest discover -s tests -t .
       - name: JS parser and coordinator tests
