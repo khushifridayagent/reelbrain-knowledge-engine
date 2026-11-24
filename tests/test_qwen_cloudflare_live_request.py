@@ -13,8 +13,15 @@ class Reply:
 
 
 class HTTP:
-    def __init__(self):self.body=None
-    def post(self,url,**kwargs):self.body=kwargs['json'];return Reply()
+    def __init__(self):self.body=None;self.url=None
+    def post(self,url,**kwargs):
+        self.body=kwargs['json'];self.url=url
+        if '/ai/run/' in url:
+            class Envelope(Reply):
+                def json(self):
+                    return {'success':True,'result':super().json()}
+            return Envelope()
+        return Reply()
 
 
 class QwenCloudflareRequestTests(unittest.TestCase):
@@ -35,6 +42,8 @@ class QwenCloudflareRequestTests(unittest.TestCase):
             self.assertEqual(body['response_format'],{'type':'json_object'})
             self.assertGreaterEqual(body['max_completion_tokens'],800)
             self.assertNotIn('enable_thinking',body)
+            self.assertTrue(client.url.endswith('/ai/run/@cf/qwen/qwen3.8-27b'))
+            self.assertNotIn('model',body)
 
     def test_non_cloudflare_endpoint_stays_backwards_compatible(self):
         from reelbrain.qwen_vl import QwenVLResearcher
@@ -48,3 +57,28 @@ class QwenCloudflareRequestTests(unittest.TestCase):
             self.assertNotIn('response_format',c.body)
 
 if __name__=='__main__':unittest.main()
+
+    def test_timeout_is_distinct_and_never_leaks_transport_details(self):
+        import httpx
+        from reelbrain.qwen_vl import QwenVLResearcher,QwenPartialVisualError
+        class TimeoutHTTP:
+            def post(self,*a,**kw):raise httpx.ReadTimeout('secret diagnostic fixture')
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'diagram.png'
+            Image.new('RGB',(320,170),'white').save(p)
+            model=QwenVLResearcher('https://custom-qwen.example/v1',client=TimeoutHTTP())
+            with self.assertRaises(QwenPartialVisualError) as err:
+                model.analyze(p)
+            self.assertEqual(str(err.exception),'visual request timeout')
+
+    def test_empty_structured_result_cannot_count_as_visual_success(self):
+        from reelbrain.qwen_vl import QwenVLResearcher,QwenPartialVisualError
+        class Empty(Reply):
+            def json(self):return {'choices':[{'message':{'content':'{"observations":[]}'}}]}
+        class EmptyHTTP:
+            def post(self,*a,**kw):return Empty()
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'diagram.png'
+            Image.new('RGB',(320,170),'white').save(p)
+            model=QwenVLResearcher('https://custom-qwen.example/v1',client=EmptyHTTP())
+            with self.assertRaises(QwenPartialVisualError):model.analyze(p)
