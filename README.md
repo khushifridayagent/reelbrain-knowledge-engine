@@ -4,6 +4,23 @@ Evidence-first personal Instagram Reel → searchable knowledge pipeline, design
 
 **State (24 November 2026):** Phase 9 autonomous **DM intake and queue coordination deployed** on isolated Supabase; one real direct `ig_reel` received and persisted. Exactly three owner-approved sender IDs are stored only in the private Supabase allowlist. Postgres cron rechecks queue every five minutes, and official Graph reconciliation checks each sender roughly every 15 minutes. Public Reel caption/metadata and distinct official-topic research can be stored in `reelbrain_reel_knowledge`. **Actual full-video OCR/ASR/VLM worker is implemented in Python but NOT hosted or verified on real media.** Website is NOT hosted. The repository is PUBLIC and contains code and synthetic tests only, no secrets or private media.
 
+### Phase 11: autonomous queue drain (November 2026)
+
+The backend now uses the durable Supabase DM queue with a **5-minute,
+best-effort GitHub Actions poll**. Each scheduled runner can drain up to
+**four eligible Reels sequentially**, then exits; new submissions are picked
+up automatically on a later poll without adding commits or opening ChatGPT.
+The main bottleneck for the six initial Reels is Instagram anonymous media
+access, **not** Supabase queuing or persistent video storage. The optional
+Apify actor integration is **not enabled**, and Qwen3-VL still requires an
+actual remote GPU endpoint. Full multimedia success is **not yet proven**:
+six items remain pending as of the most recent audit.
+
+**See `docs/AUTONOMOUS_QUEUE_AND_STORAGE.md`** for flow, credentials,
+selection of optional third-party services, measured DB usage (18 MB), and
+storage projections. Original media is transient and deleted after each run.
+Frontend and See More Details remain deferred.
+
 ### Phase 10 backend status — 24 November 2026
 
 - **Deployed:** dedicated Supabase DM intake, durable job queue, metadata coordinator (5-min cron), 3-sender reconciling and a GitHub Actions **10-minute scheduled batch runner** that has successfully connected to the isolated Reelbrain PostgreSQL database. No additional DB password/variable needs to be entered.
