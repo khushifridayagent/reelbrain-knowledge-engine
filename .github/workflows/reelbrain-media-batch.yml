@@ -71,21 +71,54 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-worker.txt
-      - name: Cache open-source Whisper model weights (no user data)
+      - name: Check eligible Reel jobs before installing heavy media tooling
+        id: queue_check
         if: ${{ steps.secret_check.outputs.ready == 'true' }}
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check 'psycopg[binary]>=3.2,<4'
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          import psycopg
+          db = os.environ.get('REELBRAIN_DB_URL','')
+          parsed = urlsplit(db)
+          ref = 'xlkdzrhzizuftbnitodr'
+          if (parsed.scheme not in ('postgres','postgresql') or
+                  ref not in (parsed.username or '').lower() and
+                  ref not in (parsed.hostname or '').lower()):
+              raise SystemExit('Reelbrain database target is missing or incorrect')
+          try:
+              with psycopg.connect(db,connect_timeout=6) as con:
+                  with con.cursor() as cur:
+                      cur.execute("""SELECT COUNT(*) FROM public.reelbrain_dm_jobs
+                          WHERE status='queued' AND available_at<=now()
+                          AND attempts<max_attempts""")
+                      eligible_jobs=int(cur.fetchone()[0])
+          except Exception as error:
+              raise SystemExit('Reelbrain DB queue unavailable (' +
+                               type(error).__name__ + ')')
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as output:
+              output.write('has_jobs=' + ('true' if eligible_jobs else 'false') + '\n')
+          print('Eligible media jobs:', eligible_jobs)
+          if not eligible_jobs:
+              print('Queue empty or all sources deferred: skipping heavy installs safely.')
+          PY
+      - name: Cache open-source Whisper model weights (no user data)
+        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
           key: reelbrain-faster-whisper-small-v1
       - name: Install real media tooling
-        if: ${{ steps.secret_check.outputs.ready == 'true' }}
+        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         shell: bash
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
       - name: Validate database connection before claiming a Reel
-        if: ${{ steps.secret_check.outputs.ready == 'true' }}
+        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         run: |
           python - <<'PY'
           from reelbrain.durable_worker import checked_config, pg_open
@@ -100,7 +133,7 @@ jobs:
           print('Dedicated worker DB connectivity verified; credentials not printed.')
           PY
       - name: Process at most one queued Reel and acknowledge outcome
-        if: ${{ steps.secret_check.outputs.ready == 'true' }}
+        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         run: |
           python - <<'PY'
           from reelbrain.durable_worker import checked_config, run_one_batch
