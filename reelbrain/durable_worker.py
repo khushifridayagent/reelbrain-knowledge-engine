@@ -135,12 +135,24 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                 if not ok:raise RuntimeError('lost lease while finalizing durable job')
                 done.append({'id':job_id,'status':r['status'],'source_url':url})
             except Exception as exc:
+                from .access_backoff import access_backoff_seconds
+                seconds_to_wait=access_backoff_seconds(exc)
                 pg.rollback()
+                reason=(type(exc).__name__+': '+str(exc))[:350]
                 with pg.cursor() as cur:
-                    cur.execute('select public.reelbrain_fail_dm_job(%s,%s,%s)',(job_id,token,(type(exc).__name__+': '+str(exc))[:350]))
+                    if seconds_to_wait is not None:
+                        # A datacenter 403/429 must not burn a Reel's finite
+                        # code-bug retries, or destroy recoverable public links.
+                        cur.execute('select public.reelbrain_defer_dm_job(%s,%s,%s,%s)',
+                                    (job_id,token,reason,seconds_to_wait))
+                    else:
+                        cur.execute('select public.reelbrain_fail_dm_job(%s,%s,%s)',
+                                    (job_id,token,reason))
                     ok=cur.fetchone()[0]
                 pg.commit()
-                done.append({'id':job_id,'status':'retry_or_dead_letter','source_url':url,'acknowledged_failure':bool(ok)})
+                done.append({'id':job_id,
+                             'status':'deferred_access' if seconds_to_wait is not None else 'retry_or_dead_letter',
+                             'source_url':url,'acknowledged_failure':bool(ok)})
         return done
 
 def serve_forever():
