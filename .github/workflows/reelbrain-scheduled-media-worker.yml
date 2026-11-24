@@ -4,23 +4,20 @@
 # dedicated Reelbrain DB credentials AND explicitly confirms source rights.
 name: Reelbrain scheduled media worker
 
+# Legacy emergency worker only; all automatic claims belong to media-batch.
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '11,26,41,56 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: reelbrain-scheduled-media-worker
+  group: reelbrain-media-batch
   cancel-in-progress: false
 
 jobs:
   process-media:
-    if: github.repository == 'khushifridayagent/reelbrain-knowledge-engine'
+    if: github.repository == 'khushifridayagent/reelbrain-knowledge-engine' && github.event_name == 'workflow_dispatch' && vars.REELBRAIN_LEGACY_WORKER_ENABLED == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 19
     env:
