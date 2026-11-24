@@ -61,3 +61,20 @@ class CobaltTests(unittest.TestCase):
                 acquire_cobalt_reel(SRC,d,http=Client(),
                     runner=lambda *a,**k:SimpleNamespace(returncode=1,stdout=''))
             self.assertEqual(list(Path(d).iterdir()),[])
+
+    def test_workflow_ready_output_routes_real_worker_to_cobalt(self):
+        from reelbrain.scrapecreators_media import acquire_with_public_provider
+        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/reelbrain-media-batch.yml').read_text()
+        startup=workflow.split('- name: Start private ephemeral open-source Cobalt',1)[1].split('\n      - ',1)[0]
+        import re
+        value=re.findall(r'echo "ready=([^"]+)"',startup)[-1]
+        self.assertEqual(value,'true')
+        with patch.dict('os.environ',{'REELBRAIN_COBALT_READY':value},clear=True):
+            self.assertTrue(cobalt_ready(SRC))
+            with patch('reelbrain.cobalt_media.acquire_cobalt_reel',return_value='actual-bundle'):
+                self.assertEqual(acquire_with_public_provider(SRC,'unused',None),'actual-bundle')
+
+    def test_false_readiness_values_do_not_enable_download(self):
+        for value in ('false','0','','unexpected'):
+            with patch.dict('os.environ',{'REELBRAIN_COBALT_READY':value},clear=True):
+                self.assertFalse(cobalt_ready(SRC))

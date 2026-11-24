@@ -111,6 +111,10 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                 with temporary_instagram_cookies() as cookies:
                     bundle=acquire_with_public_provider(
                         source_url,Path(d),pg,cookies_file=cookies)
+                print('MEDIA_ACQUIRED provider='+bundle.provider+
+                      ' assets='+str(len(bundle.paths))+
+                      ' bytes='+str(sum(p.stat().st_size for p in bundle.paths)),flush=True)
+                print('VISUAL_ANALYSIS_STARTED',flush=True)
                 result=engine_factory(db).ingest(
                     list(bundle.paths),source_url,
                     allow_external=(flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
@@ -125,7 +129,12 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
             else:raise RuntimeError('Unsupported media acquisition mode')
             if not result.get('media_processed'):
                 raise RuntimeError('provider returned no locally processed media; refusing success status')
-            return save_reel_to_postgres(db,pg,source_url,result)
+            print('MEDIA_ANALYSIS_FINISHED status='+str(result.get('status'))+
+                  ' observation_counts='+json.dumps(result.get('stage_observations',{})),flush=True)
+            saved=save_reel_to_postgres(db,pg,source_url,result)
+            print('KNOWLEDGE_PERSISTED observations='+str(saved.get('observation_count',0))+
+                  ' status='+str(saved.get('status')),flush=True)
+            return saved
         finally:db.close()
 
 def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[dict]:
