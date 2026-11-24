@@ -13,7 +13,10 @@ that every submitted Instagram Reel is accessible. No frontend has been created.
 2. The durable Postgres queue owns pending jobs, idempotency, leases, access
    backoff and recovery. Metadata/coordinator cron continues every 5 minutes.
 3. The GitHub Actions `reelbrain-media-batch.yml` polls the queue **every 5
-   minutes** (GitHub may delay or occasionally disable scheduled runs). If no
+   minutes** (GitHub may delay or occasionally disable scheduled runs).
+   **Important: scheduled workflows in public repositories are automatically
+   disabled after 60 days without repository activity**; a schedule alone is
+   not a permanent 24/7 SLA. If no
    eligible job, the job skips FFmpeg/Tesseract/AI model installation. If jobs
    exist, it drains **up to 4 serial claims** with a bounded run budget. Once
    a Reel is saved, the next scheduled poll will pick it up without reopening
@@ -88,6 +91,8 @@ Measured on **2026-11-24** for Supabase project `xlkdzrhzizuftbnitodr`:
 - Supabase Free advertised database quota **500 MB/project** and file storage
   **1 GB/project**, and low-activity projects can be paused. Limits change.
   Internal cron activity does not guarantee immunity from pause policies.
+  **Supabase Free does not include automatic daily backups.** Make encrypted,
+  off-site logical backups before relying on years of stored knowledge.
 
 Planning scenarios, not storage guarantees, assuming **10 new Reels/day**,
 all media discarded, and **50 KB or 150 KB effective PostgreSQL growth per
