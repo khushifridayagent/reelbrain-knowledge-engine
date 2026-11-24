@@ -69,3 +69,30 @@ class MediaProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaisesRegex(PublicMediaError,'credits_exhausted'):
                 acquire_scrapecreators_bundle(URL,td,'fixture',http=Client())
+
+    def test_private_owner_and_missing_carousel_coverage_are_rejected(self):
+        with self.assertRaises(PublicMediaError):
+            parse_public_assets(URL,payload(video(owner={'is_private':True})))
+        post='https://www.instagram.com/p/DgGHCjZIZtW/'
+        node={'shortcode':'DgGHCjZIZtW','__typename':'XDTGraphSidecar',
+              'edge_sidecar_to_children':{'edges':[]}}
+        with self.assertRaises(PublicMediaError):parse_public_assets(post,payload(node))
+
+    def test_disabled_fallback_preserves_prior_error(self):
+        from reelbrain.scrapecreators_media import acquire_with_public_provider
+        with patch.dict('os.environ',{},clear=True):
+            with patch('reelbrain.meta_business_media.acquire_with_meta_fallback',
+                       side_effect=PublicMediaError('original failure')):
+                with self.assertRaisesRegex(PublicMediaError,'original failure'):
+                    acquire_with_public_provider(URL,'unused',None)
+
+    def test_enabled_fallback_uses_same_source(self):
+        from reelbrain.scrapecreators_media import acquire_with_public_provider
+        with patch.dict('os.environ',{'REELBRAIN_MEDIA_SCRAPECREATORS_ENABLED':'1',
+                 'REELBRAIN_MEDIA_SCRAPECREATORS_API_KEY':'fixture'},clear=True):
+            with patch('reelbrain.meta_business_media.acquire_with_meta_fallback',
+                       side_effect=PublicMediaError('original failure')):
+                with patch('reelbrain.scrapecreators_media.acquire_scrapecreators_bundle',
+                           return_value='bundle') as fetch:
+                    self.assertEqual(acquire_with_public_provider(URL,'unused',None),'bundle')
+                    fetch.assert_called_once_with(URL,'unused','fixture')
