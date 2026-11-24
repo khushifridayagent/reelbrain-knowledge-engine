@@ -158,11 +158,22 @@ def acquire_meta_bundle(
     max_total_bytes:int=300*1024*1024,
 )->PublicBundle:
     """Acquire bounded, original Meta-provided source bytes, 1–20 pages."""
+    assets=MetaBusinessDiscovery(token,own_ig_user_id,http=lookup_http).find(url,creator_username)
+    return download_source_assets(assets,output_directory,download_http=download_http,
+                                  max_total_bytes=max_total_bytes)
+
+
+def download_source_assets(assets:tuple[MetaSourceAsset,...],output_directory:Path|str,*,
+                           download_http=None,max_total_bytes:int=300*1024*1024,
+                           provider:str='meta-business-discovery-official')->PublicBundle:
+    """Validate provider-resolved public CDN assets using the same bounded byte checks."""
     from .public_bundle import PublicBundle
+    if not 1<=len(assets)<=20 or any(a.media_type not in ('VIDEO','IMAGE')
+            or not valid_meta_media_url(a.media_url) for a in assets):
+        raise MetaMediaUnavailable('Public media unavailable: invalid source assets')
     root=Path(output_directory)
     if root.is_symlink() or not root.is_dir() or not 1024<=max_total_bytes<=300*1024*1024:
         raise MetaMediaUnavailable('Public media unavailable: invalid temporary target/budget')
-    assets=MetaBusinessDiscovery(token,own_ig_user_id,http=lookup_http).find(url,creator_username)
     import httpx
     http=download_http or httpx.Client(follow_redirects=False,trust_env=False,timeout=55)
     paths=[];created=[];total=0
@@ -192,7 +203,7 @@ def acquire_meta_bundle(
             if not _valid_asset(path):
                 raise MetaMediaUnavailable('Public media unavailable: Meta returned invalid media bytes')
             paths.append(path)
-        return PublicBundle(tuple(paths),'meta-business-discovery-official')
+        return PublicBundle(tuple(paths),provider)
     except BaseException:
         for p in created:p.unlink(missing_ok=True)
         raise

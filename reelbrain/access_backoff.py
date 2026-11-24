@@ -17,6 +17,8 @@ def access_backoff_seconds(error: BaseException) -> int | None:
     if not isinstance(error, PublicMediaError):
         return None
     reason=str(error).lower()[:400]
+    if 'credits_exhausted' in reason or 'credential_invalid' in reason:
+        return 24 * 3600
     if 'rate_limited' in reason or 'too many requests' in reason:
         return 12 * 3600
     if 'http_forbidden' in reason or 'login_required' in reason:
