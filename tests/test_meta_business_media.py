@@ -140,4 +140,33 @@ class MetaDiscoveryTests(unittest.TestCase):
                     public_fetch=fail_public,
                     meta_fetch=lambda *args: (_ for _ in ()).throw(AssertionError('must not call Meta')))
 
+    def test_complete_2_page_carousel_temp_download_preserves_order(self):
+        from reelbrain.meta_business_media import acquire_meta_bundle
+        files=[{'id':'A','media_type':'IMAGE',
+                 'media_url':'https://scontent.cdninstagram.com/a.jpg'},
+               {'id':'B','media_type':'IMAGE',
+                 'media_url':'https://scontent.cdninstagram.com/b.jpg'}]
+        payload={'business_discovery':{'username':'somecreator','media':{'data':[{
+            'permalink':'https://www.instagram.com/p/DgGHCjZIZtW/',
+            'media_type':'CAROUSEL_ALBUM','children':{'data':files}}]}}}
+        class SourceStream:
+            status_code=200
+            headers={'content-length':'60'}
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+            def iter_bytes(self,chunk_size=1024):yield b'\\xff\\xd8\\xff'+b'X'*58
+        class Downloader:
+            def __init__(self):self.paths=[]
+            def stream(self,method,url,**kwargs):self.paths.append(url);return SourceStream()
+        dl=Downloader()
+        with tempfile.TemporaryDirectory() as d:
+            bundle=acquire_meta_bundle('https://www.instagram.com/p/DgGHCjZIZtW/',
+                 'somecreator','fixture','17841400001234567',d,
+                 lookup_http=FakeClient(payload),download_http=dl)
+            self.assertEqual(len(bundle.paths),2)
+            self.assertEqual([p.name for p in bundle.paths],['page_01.jpg','page_02.jpg'])
+            self.assertTrue(all(p.is_file() for p in bundle.paths))
+            self.assertEqual(bundle.provider,'meta-business-discovery-official')
+
+
 if __name__=='__main__':unittest.main()
