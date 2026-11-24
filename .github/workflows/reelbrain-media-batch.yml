@@ -121,8 +121,8 @@ jobs:
               with psycopg.connect(db,connect_timeout=6) as con:
                   with con.cursor() as cur:
                       cur.execute("""SELECT COUNT(*) FROM public.reelbrain_dm_jobs
-                          WHERE status='queued' AND available_at<=now()
-                          AND attempts<max_attempts""")
+                          WHERE (status='queued' AND available_at<=now()
+                          AND attempts<max_attempts) OR (status='leased' AND lease_until<now())""")
                       eligible_jobs=int(cur.fetchone()[0])
           except Exception as error:
               raise SystemExit('Reelbrain DB queue unavailable (' +
@@ -141,7 +141,7 @@ jobs:
           python -m pip install --disable-pip-version-check 'httpx>=0.27,<1'
           python - <<'PY'
           from reelbrain.hosted_transcript_job import run_hosted_transcript_drain
-          # Only a PER-RUN time bound for GitHub's 14-minute job; there is
+          # Only a PER-RUN time bound; there is
           # NO arbitrary daily incoming-Reel limit; drain up to four New submissions remain
           # queued and resume at the next 5-minute/Cloudflare-triggered tick.
           result=run_hosted_transcript_drain(max_jobs_per_tick=4,max_seconds=210)
@@ -208,7 +208,7 @@ jobs:
           from reelbrain.durable_worker import checked_config
           from reelbrain.resumable_media import drain_overlapping
           from reelbrain.batch_outcome import require_successful_batch
-          # Two independent workers overlap media processing; each renews its lease.
+          # Three in-flight Reels; one slot per download, analysis and persistence stage.
           # All media is transient and observations go to dedicated Postgres.
           result = drain_overlapping(checked_config(), max_jobs=4)
           print('Claimed jobs:', len(result))
