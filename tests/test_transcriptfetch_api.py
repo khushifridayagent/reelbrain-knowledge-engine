@@ -77,6 +77,26 @@ class TranscriptFetchTests(unittest.TestCase):
         with self.assertRaises(TranscriptFetchError):
             normalize_transcriptfetch(SOURCE,d)
 
+    def test_official_timestamps_only_response_reconstructs_full_text(self):
+        # Official TranscriptFetch SDK docs: with timestamps=true the REST
+        # response may contain only segments; text is deliberately omitted.
+        d=speech()
+        d['data'].pop('text')
+        d['data']['segments']=[
+            {'start':0,'duration':1.5,'text':'Tool number one'},
+            {'start':1.5,'duration':2.0,'text':'is available on GitHub'},
+        ]
+        found=normalize_transcriptfetch(SOURCE,d)
+        self.assertIsNotNone(found)
+        self.assertEqual(found['text'],'Tool number one is available on GitHub')
+        self.assertEqual(len(found['segments']),2)
+
+    def test_no_segments_and_no_text_returns_empty_not_complete(self):
+        d=speech()
+        d['data'].pop('text')
+        d['data']['segments']=[]
+        self.assertIsNone(normalize_transcriptfetch(SOURCE,d))
+
     def test_no_spoken_text_does_not_invent_knowledge(self):
         d=speech();d['data']['text']='';d['data']['segments']=[]
         self.assertIsNone(normalize_transcriptfetch(SOURCE,d))
