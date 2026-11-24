@@ -97,4 +97,47 @@ class MetaDiscoveryTests(unittest.TestCase):
             'REELBRAIN_META_IG_USER_ID':'17841400001234567','REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED':'1'},clear=True):
             self.assertTrue(meta_fallback_enabled())
 
+    def test_existing_public_downloader_always_gets_first_chance(self):
+        from reelbrain.meta_business_media import acquire_with_meta_fallback
+        class PG:
+            def cursor(self):raise AssertionError('Should not query creators when download works')
+        bundle=object()
+        found=acquire_with_meta_fallback(SRC,Path('/tmp'),PG(),
+            public_fetch=lambda *args,**kwargs:bundle,meta_fetch=lambda *args,**kwargs:None)
+        self.assertIs(found,bundle)
+
+    def test_on_403_and_authorized_pro_account_fallback_uses_creator_from_db(self):
+        from reelbrain.meta_business_media import acquire_with_meta_fallback
+        from reelbrain.public_media import PublicMediaError
+        class PGCursor:
+            def __init__(self):self.params=None
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+            def execute(self,sql,args):self.params=args
+            def fetchone(self):return ('aimortal.ig',)
+        class PG:
+            def cursor(self):return PGCursor()
+        seen={}
+        def fail_public(*a,**kw):raise PublicMediaError('Public Reel download unavailable: http_forbidden')
+        def lookup(*args,**kwargs):seen['args']=args;return 'actual_meta_media'
+        env={'REELBRAIN_META_GRAPH_TOKEN':'fixture','REELBRAIN_META_IG_USER_ID':'17841400001234567',
+             'REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED':'1'}
+        with patch.dict('os.environ',env,clear=True):
+            result=acquire_with_meta_fallback(SRC,Path('/tmp'),PG(),
+                public_fetch=fail_public,meta_fetch=lookup)
+        self.assertEqual(result,'actual_meta_media')
+        self.assertEqual(seen['args'][1],'aimortal.ig')
+
+    def test_missing_token_prevents_meta_network_and_preserves_access_failure(self):
+        from reelbrain.meta_business_media import acquire_with_meta_fallback
+        from reelbrain.public_media import PublicMediaError
+        class PG:
+            def cursor(self):raise AssertionError('Should not query unless fallback configured')
+        def fail_public(*a,**kw):raise PublicMediaError('Public Reel download unavailable: http_forbidden')
+        with patch.dict('os.environ',{},clear=True):
+            with self.assertRaises(PublicMediaError):
+                acquire_with_meta_fallback(SRC,Path('/tmp'),PG(),
+                    public_fetch=fail_public,
+                    meta_fetch=lambda *args: (_ for _ in ()).throw(AssertionError('must not call Meta')))
+
 if __name__=='__main__':unittest.main()
