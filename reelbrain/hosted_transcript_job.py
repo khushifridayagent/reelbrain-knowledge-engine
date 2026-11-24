@@ -11,6 +11,10 @@ import os
 from .hosted_transcript import (
     HostedTranscriptClient, TranscriptProviderError, hosted_transcript_enabled,
 )
+from .transcriptfetch_api import (
+    TranscriptFetchClient,TranscriptFetchQuotaError,
+    TranscriptFetchRateLimitError,TranscriptFetchAuthError,
+)
 
 
 def daily_transcript_request_cap()->int:
@@ -228,9 +232,6 @@ def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_fact
     if provider not in ('scrapecreators','transcriptfetch'):
         raise RuntimeError('Invalid hosted transcript provider')
     if provider=='transcriptfetch':
-        from .transcriptfetch_api import (
-            TranscriptFetchClient,TranscriptFetchQuotaError,
-            TranscriptFetchRateLimitError,TranscriptFetchAuthError)
         adapter=client or TranscriptFetchClient(os.environ['TRANSCRIPTFETCH_API_KEY'])
     else:
         adapter=client or HostedTranscriptClient(os.environ['REELBRAIN_TRANSCRIPT_API_KEY'])
