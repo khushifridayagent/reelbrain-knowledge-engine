@@ -48,4 +48,28 @@ class SlideRetentionTests(unittest.TestCase):
                 self.assertTrue(all('workflow arrow' in row['verbatim'] for row in observations))
             finally:store.close()
 
+
+    def test_dropped_scenes_cannot_be_reported_as_complete_video(self):
+        from reelbrain.engine import LocalPipelineEngine
+        from reelbrain.contracts import Observation
+        from reelbrain.store import KnowledgeStore
+        class SamplingLimitedModel:
+            requires_external=True
+            sampling_stats={'partial_scan':True,'candidate_scenes':70,'selected_scenes':32}
+            def analyze(self,source):
+                return [Observation('Scene: pipeline diagram',kind='model_inference',locator='qwen:00:01')]
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            p=root/'poster.png';cv2.imwrite(str(p),np.full((200,300,3),255,np.uint8))
+            store=KnowledgeStore(root/'db.sqlite')
+            try:
+                data=LocalPipelineEngine(store,ocr=lambda _:[
+                    Observation('A visible link',kind='ocr',locator='image:1')
+                ],video_model=SamplingLimitedModel()).ingest(
+                    p,'https://www.instagram.com/p/DgGHCjZIZtW/',allow_external=True)
+                self.assertEqual(data['status'],'partial')
+                self.assertIn('visual_coverage',data['stage_errors'])
+                self.assertEqual(data['stage_observations']['vlm'],1)
+            finally:store.close()
+
 if __name__=='__main__':unittest.main()
