@@ -85,3 +85,27 @@ class ResumableMediaTests(unittest.TestCase):
                 self.assertEqual(ocr.call_count,1)
                 self.assertEqual(vision.analyze.call_count,2)
             finally:db.close()
+
+    def test_required_modality_recovery_distinguishes_optional_enrichment(self):
+        from reelbrain.resumable_media import required_incomplete_stages
+        self.assertEqual(required_incomplete_stages({
+            'stage_errors': {}, 'audio_required': True,
+            'unattempted_modalities': ['structured_fact_model','asr','video_model']
+        }), ['asr','video_model'])
+        self.assertEqual(required_incomplete_stages({
+            'stage_errors': {}, 'audio_required': True,
+            'hosted_audio_reused': 'transcriptfetch',
+            'unattempted_modalities': ['structured_fact_model','asr']
+        }), [])
+        self.assertEqual(required_incomplete_stages({
+            'stage_errors': {}, 'audio_required': False,
+            'unattempted_modalities': ['asr','structured_fact_model']
+        }), [])
+        self.assertEqual(required_incomplete_stages({
+            'stage_errors': {'vlm':'quota exceeded'},
+            'unattempted_modalities': []
+        }), ['vlm'])
+
+    def test_partial_without_error_is_not_a_success(self):
+        from reelbrain.resumable_media import retry_seconds
+        self.assertEqual(retry_seconds({'video_model':'required modality not attempted'}),3600)
