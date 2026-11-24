@@ -16,6 +16,18 @@ class TranscriptFetchError(RuntimeError):
     """Safe external-provider error category, without URL or bearer token."""
 
 
+class TranscriptFetchQuotaError(TranscriptFetchError):
+    """402 / exhausted credits; wait for actual provider refill, no charged retry."""
+
+
+class TranscriptFetchRateLimitError(TranscriptFetchError):
+    """429 rate limited; transient and free of credits."""
+
+
+class TranscriptFetchAuthError(TranscriptFetchError):
+    """401 invalid credential; no billable retry should be attempted."""
+
+
 BASE='https://transcriptfetch.com'
 JOB_RE=re.compile(r'^asr_[A-Za-z0-9_-]{3,80}$')
 
@@ -91,7 +103,9 @@ class TranscriptFetchClient:
 
     def _send(self,method:str,path:str,**kwargs)->dict:
         import httpx
-        if not path.startswith('/api/v2/transcripts/') or '://' in path:
+        if path!='/api/v2/me' and not path.startswith('/api/v2/transcripts/'):
+            raise TranscriptFetchError('Unexpected transcript endpoint')
+        if '://' in path or '?' in path or '#' in path:
             raise TranscriptFetchError('Unexpected transcript endpoint')
         headers={'Authorization':'Bearer '+self.key,
                  'Content-Type':'application/json',
@@ -99,6 +113,10 @@ class TranscriptFetchClient:
         try:
             client=self.http or httpx
             response=getattr(client,method)(BASE+path,headers=headers,timeout=58,**kwargs)
+            code=getattr(response,'status_code',0)
+            if code==402:raise TranscriptFetchQuotaError('TranscriptFetch credits exhausted')
+            if code==429:raise TranscriptFetchRateLimitError('TranscriptFetch request rate limited')
+            if code==401:raise TranscriptFetchAuthError('TranscriptFetch key invalid')
             response.raise_for_status()
             payload=response.json()
             if not isinstance(payload,dict):
@@ -108,8 +126,32 @@ class TranscriptFetchClient:
         except Exception as exc:
             raise TranscriptFetchError('TranscriptFetch request failed ('+type(exc).__name__+')') from None
 
+    def balance(self)->int:
+        """Official GET /api/v2/me: free account credit check on every tick.
+
+        Stop before claims on empty balance. Never infer monthly renewal dates:
+        if the provider does replenish credits, the next tick auto-resumes.
+        """
+        data=self._send('get','/api/v2/me')
+        details=data.get('data')
+        if (data.get('ok') is not True or not isinstance(details,dict)
+            or details.get('kind')!='me'):
+            raise TranscriptFetchError('Invalid transcript account balance response')
+        credits=details.get('credits')
+        if not isinstance(credits,int) or isinstance(credits,bool) or credits<0:
+            raise TranscriptFetchError('Malformed transcript account credit count')
+        return credits
+
     def _result(self,url:str,payload:dict)->dict:
         if payload.get('ok') is not True:
+            error=payload.get('error')
+            code=error.get('code') if isinstance(error,dict) else None
+            if code=='insufficient_credits':
+                raise TranscriptFetchQuotaError('TranscriptFetch credits exhausted')
+            if code=='rate_limited':
+                raise TranscriptFetchRateLimitError('TranscriptFetch request rate limited')
+            if code=='unauthorized':
+                raise TranscriptFetchAuthError('TranscriptFetch key invalid')
             raise TranscriptFetchError('TranscriptFetch returned failure')
         if payload.get('status')=='processing':
             job_id=validate_poll_id(payload.get('job_id'))

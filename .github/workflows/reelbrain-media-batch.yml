@@ -29,12 +29,13 @@ jobs:
     timeout-minutes: 14
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
-      # Separate URL-first speech API. BOTH approval variables are required;
-      # completely inert if unset. Defaults to 2 reserved calls/UTC day.
+      # URL-first spoken ASR, always budget-gated. TranscriptFetch checks
+      # actual account credits (free GET /me); 0 balance pauses, and a real
+      # provider refill auto-resumes. All incoming sources stay queued.
       REELBRAIN_HOSTED_TRANSCRIPT_ENABLED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_ENABLED || '0' }}
       REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED || '0' }}
-      # Defaults to 2/day. Increase only after checking provider billing and
-      # declaring owner-approved credit budget; hard cap 120 starts per UTC day.
+      # Legacy ScrapeCreators ONLY request safety cap. TranscriptFetch ignores
+      # this obsolete 60/day user-configured variable and checks real credits.
       REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT || '2' }}
       REELBRAIN_TRANSCRIPT_API_KEY: ${{ secrets.REELBRAIN_TRANSCRIPT_API_KEY }}
       # URL-first transcript provider: choose 'scrapecreators' (default) or
@@ -130,12 +131,14 @@ jobs:
           # psycopg is installed in the lightweight queue eligibility step.
           python -m pip install --disable-pip-version-check 'httpx>=0.27,<1'
           python - <<'PY'
-          from reelbrain.hosted_transcript_job import run_one_hosted_transcript
-          result=run_one_hosted_transcript()
-          # Only status/count; no Reel URL, account detail, API token or
-          # raw provider response is printed or logged.
+          from reelbrain.hosted_transcript_job import run_hosted_transcript_drain
+          # Only a PER-RUN time bound for GitHub's 14-minute job; there is
+          # NO arbitrary daily incoming-Reel limit. New submissions remain
+          # queued and resume at the next 5-minute/Cloudflare-triggered tick.
+          result=run_hosted_transcript_drain(max_jobs_per_tick=2,max_seconds=100)
           print('URL-first speech:',result['status'])
-          print('Reserved provider requests:',result['requests_sent'])
+          print('Verified transcripts persisted:',result['jobs_completed'])
+          print('Provider starts attempted:',result['provider_starts'])
           PY
       - name: Cache open-source Whisper model weights (no user data)
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}

@@ -11,6 +11,10 @@ import os
 from .hosted_transcript import (
     HostedTranscriptClient, TranscriptProviderError, hosted_transcript_enabled,
 )
+from .transcriptfetch_api import (
+    TranscriptFetchClient,TranscriptFetchQuotaError,
+    TranscriptFetchRateLimitError,TranscriptFetchAuthError,
+)
 
 
 def daily_transcript_request_cap()->int:
@@ -52,30 +56,46 @@ def _reserve_one(pg,provider='scrapecreators'):
                    AND NOT (coalesce(k.verified_reel_content,'{}'::jsonb) ? 'provider_audio_transcript')
                    AND (a.source_url IS NULL
                         OR (a.state IN ('pending','retry')
-                            AND a.attempts < 3 AND a.next_attempt_at <= now())
-                        OR (a.state='claimed' AND a.attempts < 3
+                            AND a.next_attempt_at <= now())
+                        OR (a.state='claimed'
                             AND a.last_attempt_at < now()-interval '60 minutes'))
                  ORDER BY j.created_at,j.id LIMIT 1
             """)
             hit=cur.fetchone()
             if not hit:return None
             url=hit[0]
-            cur.execute("""
-                INSERT INTO reelbrain_research.hosted_transcript_daily_budget
-                  (usage_day,reserved_calls) VALUES ((now() at time zone 'UTC')::date,1)
-                ON CONFLICT (usage_day) DO UPDATE SET
-                  reserved_calls=reelbrain_research.hosted_transcript_daily_budget.reserved_calls+1,
-                  updated_at=now()
-                WHERE reelbrain_research.hosted_transcript_daily_budget.reserved_calls < %s
-                RETURNING reserved_calls
-            """,(daily_transcript_request_cap(),))
+            if provider=='transcriptfetch':
+                # Enforce actual LIVE account credits (free GET /api/v2/me)
+                # before claiming. This is a usage ledger, not a 60/day cap.
+                cur.execute("""
+                    INSERT INTO reelbrain_research.hosted_transcript_daily_budget
+                      (usage_day,reserved_calls)
+                    VALUES ((now() at time zone 'UTC')::date,1)
+                    ON CONFLICT (usage_day) DO UPDATE SET
+                      reserved_calls=reelbrain_research.hosted_transcript_daily_budget.reserved_calls+1,
+                      updated_at=now()
+                    RETURNING reserved_calls
+                """)
+            else:
+                # Legacy ScrapeCreators mode still requires owner-approved
+                # bounded starts because it lacks a verified live balance API.
+                cur.execute("""
+                    INSERT INTO reelbrain_research.hosted_transcript_daily_budget
+                      (usage_day,reserved_calls)
+                    VALUES ((now() at time zone 'UTC')::date,1)
+                    ON CONFLICT (usage_day) DO UPDATE SET
+                      reserved_calls=reelbrain_research.hosted_transcript_daily_budget.reserved_calls+1,
+                      updated_at=now()
+                    WHERE reelbrain_research.hosted_transcript_daily_budget.reserved_calls < %s
+                    RETURNING reserved_calls
+                """,(daily_transcript_request_cap(),))
             if cur.fetchone() is None:return None
             cur.execute("""
                 INSERT INTO reelbrain_research.hosted_transcript_attempts
                   (source_url,attempts,state,provider,last_attempt_at,next_attempt_at)
                 VALUES (%s,1,'claimed',%s,now(),now()+interval '48 hours')
                 ON CONFLICT (source_url) DO UPDATE SET
-                  attempts=reelbrain_research.hosted_transcript_attempts.attempts+1,
+                  attempts=least(3,reelbrain_research.hosted_transcript_attempts.attempts+1),
                   state='claimed',provider=excluded.provider,
                   provider_job_id=NULL,
                   last_attempt_at=now(),
@@ -166,6 +186,8 @@ def _finalize(pg,url:str,transcript:dict|None,error_category:str|None=None)->boo
                     last_category=%s,
                     next_attempt_at=CASE WHEN %s='completed' THEN now()+interval '365 days'
                          WHEN %s='no_speech' THEN now()+interval '90 days'
+                         WHEN reelbrain_research.hosted_transcript_attempts.attempts>=3
+                              THEN now()+interval '7 days'
                          ELSE now()+interval '48 hours' END,
                     updated_at=now()
                 WHERE source_url=%s
@@ -173,11 +195,29 @@ def _finalize(pg,url:str,transcript:dict|None,error_category:str|None=None)->boo
     return saved
 
 
-def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_factory=None)->dict:
-    """Optional per-run ASR: poll 202 first, then reserve one new paid request.
+def _defer_unbilled(pg,url,category:str,seconds:int=1800)->None:
+    """402/429 never exhaust a Reel's limited source-failure retries."""
+    if not 60<=seconds<=86400:
+        raise ValueError('Invalid provider retry delay')
+    with pg.transaction():
+        with pg.cursor() as cur:
+            cur.execute("""
+                UPDATE reelbrain_research.hosted_transcript_attempts SET
+                  state='retry',attempts=greatest(0,attempts-1),
+                  provider_job_id=NULL,last_category=%s,
+                  next_attempt_at=now()+make_interval(secs=>%s),
+                  updated_at=now()
+                WHERE source_url=%s
+            """,(category[:60],seconds,url))
 
-    Both providers remain OFF unless user gives their actual API key and
-    two explicit approval flags. Media queue retains unfinished OCR/VLM jobs.
+
+def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_factory=None)->dict:
+    """Process ONE due ASR task; pause on actual zero balance, never discard work.
+
+    Existing Supabase queue is the unlimited intake buffer. No arbitrary
+    daily incoming-Reel cap: TranscriptFetch's LIVE balance is authoritative,
+    and an empty account resumes automatically when balance becomes positive.
+    Credit-check and async polling are free provider operations.
     """
     if not hosted_transcript_enabled():
         return {'status':'disabled','requests_sent':0}
@@ -191,14 +231,19 @@ def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_fact
     provider=os.environ.get('REELBRAIN_HOSTED_TRANSCRIPT_PROVIDER','scrapecreators').strip().lower()
     if provider not in ('scrapecreators','transcriptfetch'):
         raise RuntimeError('Invalid hosted transcript provider')
+    if provider=='transcriptfetch':
+        adapter=client or TranscriptFetchClient(os.environ['TRANSCRIPTFETCH_API_KEY'])
+    else:
+        adapter=client or HostedTranscriptClient(os.environ['REELBRAIN_TRANSCRIPT_API_KEY'])
     with connection_factory(validated) as pg:
         pending=_poll_one(pg) if provider=='transcriptfetch' else None
         if pending:
             url,job_id=pending
-            from .transcriptfetch_api import TranscriptFetchClient
-            adapter=client or TranscriptFetchClient(os.environ['TRANSCRIPTFETCH_API_KEY'])
             try:
                 response=adapter.poll(url,job_id)
+            except TranscriptFetchQuotaError:
+                _defer_unbilled(pg,url,'insufficient_credits',seconds=1800)
+                return {'status':'credits_exhausted_wait_for_refill','requests_sent':0}
             except Exception as exc:
                 _mark_processing(pg,url,job_id,error_category_for(exc))
                 return {'status':'poll_retry','requests_sent':0}
@@ -209,13 +254,20 @@ def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_fact
             return {'status':'transcript_saved' if persisted else 'no_speech_or_duplicate',
                     'requests_sent':0}
 
-        url=_reserve_one(pg,provider)
-        if not url:return {'status':'no_eligible_source_or_daily_budget','requests_sent':0}
         if provider=='transcriptfetch':
-            from .transcriptfetch_api import TranscriptFetchClient
-            adapter=client or TranscriptFetchClient(os.environ['TRANSCRIPTFETCH_API_KEY'])
-        else:
-            adapter=client or HostedTranscriptClient(os.environ['REELBRAIN_TRANSCRIPT_API_KEY'])
+            # Check credits BEFORE claim; free, supports both one-off balances
+            # and actually recurring monthly refills without human resets.
+            try:
+                credits=adapter.balance()
+            except TranscriptFetchAuthError:
+                return {'status':'credential_invalid','requests_sent':0}
+            except Exception:
+                return {'status':'account_balance_unavailable','requests_sent':0}
+            if credits<1:
+                return {'status':'credits_exhausted_wait_for_refill','requests_sent':0}
+
+        url=_reserve_one(pg,provider)
+        if not url:return {'status':'queue_idle_or_legacy_daily_safety_cap','requests_sent':0}
         try:
             response=adapter.start(url) if provider=='transcriptfetch' else {
                 'state':'completed','transcript':adapter.fetch(url)}
@@ -223,12 +275,51 @@ def run_one_hosted_transcript(db_url:str|None=None,*,client=None,connection_fact
                 _mark_processing(pg,url,response['job_id'])
                 return {'status':'provider_async_processing','requests_sent':1}
             transcript=response.get('transcript')
+        except TranscriptFetchQuotaError:
+            _defer_unbilled(pg,url,'insufficient_credits',seconds=1800)
+            return {'status':'credits_exhausted_wait_for_refill','requests_sent':1}
+        except TranscriptFetchRateLimitError:
+            _defer_unbilled(pg,url,'rate_limited',seconds=900)
+            return {'status':'provider_rate_limited','requests_sent':1}
+        except TranscriptFetchAuthError:
+            _defer_unbilled(pg,url,'credential_invalid',seconds=7200)
+            return {'status':'credential_invalid','requests_sent':1}
         except Exception as exc:
             _finalize(pg,url,None,error_category=error_category_for(exc))
             return {'status':'provider_failed_deferred','requests_sent':1}
         persisted=_finalize(pg,url,transcript)
         return {'status':'transcript_saved' if persisted else 'no_speech_or_duplicate',
                 'requests_sent':1}
+
+
+def run_hosted_transcript_drain(*,max_jobs_per_tick:int=2,max_seconds:int=100)->dict:
+    """Bound per-GitHub-run work, NOT daily input count.
+
+    Every future 5-minute tick resumes any remaining rows; 0/100/200 incoming
+    Reels are all retained in the same durable DB queue.
+    """
+    import time
+    if not 1<=max_jobs_per_tick<=8:
+        raise ValueError('Per-run worker batch outside safe GitHub timeout')
+    if not 10<=max_seconds<=240:
+        raise ValueError('Per-run transcript window outside safe runner timeout')
+    start=time.monotonic()
+    results=[]
+    terminal={'disabled','credits_exhausted_wait_for_refill',
+              'provider_rate_limited','account_balance_unavailable',
+              'credential_invalid','queue_idle_or_legacy_daily_safety_cap'}
+    while len(results)<max_jobs_per_tick and (time.monotonic()-start)<max_seconds:
+        status=run_one_hosted_transcript()
+        results.append(status)
+        if status['status'] in terminal:break
+    return {
+        'status':('queue_idle' if results and
+                  results[-1]['status']=='queue_idle_or_legacy_daily_safety_cap'
+                  else results[-1]['status'] if results else 'runner_window_elapsed'),
+        'jobs_completed':sum(int(v['status']=='transcript_saved') for v in results),
+        'provider_starts':sum(int(v['requests_sent']) for v in results),
+        'tasks_touched':len(results)
+    }
 
 
 def error_category_for(exc:Exception)->str:
