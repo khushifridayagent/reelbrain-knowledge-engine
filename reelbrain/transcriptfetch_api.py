@@ -115,7 +115,7 @@ class TranscriptFetchClient:
     def start(self,url:str)->dict:
         canonical=canonicalize_instagram(url)
         return self._result(canonical,self._send('post','/api/v2/transcripts/video',
-              json={'video':canonical,'mode':'audio','timestamps':'segment'}))
+              json={'video':canonical,'mode':'audio','timestamps':True}))
 
     def poll(self,url:str,job_id:str)->dict:
         canonical=canonicalize_instagram(url)
