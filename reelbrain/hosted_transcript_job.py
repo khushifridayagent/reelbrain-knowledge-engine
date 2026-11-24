@@ -33,7 +33,9 @@ def _reserve_one(pg,provider='scrapecreators'):
                    AND NOT (coalesce(k.verified_reel_content,'{}'::jsonb) ? 'provider_audio_transcript')
                    AND (a.source_url IS NULL
                         OR (a.state IN ('pending','retry')
-                            AND a.attempts < 3 AND a.next_attempt_at <= now()))
+                            AND a.attempts < 3 AND a.next_attempt_at <= now())
+                        OR (a.state='claimed' AND a.attempts < 3
+                            AND a.last_attempt_at < now()-interval '60 minutes'))
                  ORDER BY j.created_at,j.id LIMIT 1
             """)
             hit=cur.fetchone()
