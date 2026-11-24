@@ -167,6 +167,18 @@ class QwenVLResearcher:
                     'url':'data:image/jpeg;base64,'+base64.b64encode(raw).decode('ascii')}})
             body={'model':self.model,'messages':[{'role':'user','content':contents}],
                   'temperature':0,'max_tokens':2600}
+            # Live Cloudflare Qwen3.8 screenshot inference confirmed the
+            # default extended reasoning can use every completion token
+            # without returning a message.content (finish_reason=length).
+            # Cloudflare documents reasoning_effort=low and JSON mode;
+            # use both only for that verified provider.
+            if (self.model.startswith('@cf/qwen/') and
+                    self.url.startswith('https://api.cloudflare.com/')):
+                body.update({
+                    'reasoning_effort':'low',
+                    'response_format':{'type':'json_object'},
+                    'max_completion_tokens':2600
+                })
             headers={'Content-Type':'application/json'}
             if self.key:headers['Authorization']='Bearer '+self.key
             try:
