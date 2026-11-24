@@ -50,7 +50,7 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
                 audio_ready and bool(observations))
     return {
         'video_analyzed': video_analyzed,
-        'audio_transcribed': asr_succeeded and int(counts.get('asr') or 0) > 0,
+        'audio_transcribed': media_processed and (hosted_audio or (asr_succeeded and int(counts.get('asr') or 0) > 0)),
         'ocr_analyzed': ocr_succeeded,
         'processing_stage': 'completed' if complete else ('partial_media' if media_processed else 'media_pending'),
         'content': {
