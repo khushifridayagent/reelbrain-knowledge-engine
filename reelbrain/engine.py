@@ -111,14 +111,39 @@ class LocalPipelineEngine:
                     locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
                     observations.append(Observation(ev.text,kind=ev.kind,locator=locator,confidence=ev.confidence))
             return observations
+        visual_coverage_gaps=[]
         def video_understanding():
+            from .qwen_vl import QwenPartialVisualError
             observations=[]
             for idx,asset in enumerate(media_assets,1):
-                # Image-capable VLM adapters may interpret static carousel pages
-                # as well as video clips. Models return inferences, never proof.
-                for ev in self.video_model.analyze(asset):
-                    locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
-                    observations.append(Observation(ev.text,kind='model_inference',locator=locator,confidence=ev.confidence))
+                # Every static carousel slide gets its own visual pass; no
+                # hallucination from speech can stand in for missing pages.
+                def add_results(events):
+                    for ev in events:
+                        if not isinstance(ev,Observation):
+                            raise TypeError('Visual model returned an invalid observation')
+                        locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
+                        observations.append(Observation(
+                            ev.text,kind='model_inference',
+                            locator=locator,confidence=ev.confidence))
+                try:
+                    add_results(self.video_model.analyze(asset))
+                    stats=getattr(self.video_model,'sampling_stats',None)
+                    if isinstance(stats,dict) and stats.get('partial_scan'):
+                        visual_coverage_gaps.append(
+                            f"asset:{idx:02d}:sampled:{int(stats.get('selected_scenes') or 0)}"
+                            f":candidate:{int(stats.get('candidate_scenes') or 0)}")
+                except Exception as exc:
+                    partial=getattr(exc,'partial_observations',None)
+                    if isinstance(partial,list):
+                        add_results(partial)
+                    # VLM over-quota after a page MUST NOT wipe earlier
+                    # successful image inferences, nor independently decoded
+                    # source OCR/QR evidence. Never leak raw provider errors.
+                    category='quota exceeded' if 'quota' in str(exc).lower() else (
+                        'service unavailable' if 'unavailable' in str(exc).lower()
+                        else 'visual model request failed')
+                    raise QwenPartialVisualError(category,observations) from None
             return observations
         tasks={'ocr':read_all_pages}
         if self.audio_model is not None and video_assets:tasks['asr']=transcribe_all
@@ -153,6 +178,10 @@ class LocalPipelineEngine:
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
         if slide_failures:
             errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
+        if visual_coverage_gaps:
+            # 32 selected scenes do not mean every fast-changing visual state
+            # was understood. Keep the correct partial status for follow-up.
+            errors['visual_coverage']='Qwen scene sample budget left gaps: '+','.join(visual_coverage_gaps[:20])
         extra=list(extra_observations or [])
         if not all(isinstance(ev,Observation) and ev.kind in ('caption','asr','manual','document') for ev in extra):
             raise ValueError('external observations must be typed source evidence, not model output')
