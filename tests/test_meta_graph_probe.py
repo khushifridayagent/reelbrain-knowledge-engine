@@ -77,4 +77,45 @@ class GraphProbeTests(unittest.TestCase):
         ])
         r=check_meta_business_access('fixture','17841400001234567','1',creator='aimortal.ig',shortcode='DgGHCjZIZtW',http=http)
         self.assertEqual(r['status'],'source_not_in_business_discovery')
+    def test_linked_page_ig_id_is_derived_when_configured_id_is_page_or_app(self):
+        from reelbrain.meta_graph_probe import choose_linked_professional_ig_id
+        pages={'data':[{'id':'11223344','instagram_business_account':{'id':'17841400001234567'}}]}
+        self.assertEqual(choose_linked_professional_ig_id(pages,'1234567890'),
+                         '17841400001234567')
+
+    def test_ambiguous_multiple_ig_accounts_must_never_guess(self):
+        from reelbrain.meta_graph_probe import choose_linked_professional_ig_id
+        pages={'data':[{'instagram_business_account':{'id':'17841400001234567'}},
+                       {'instagram_business_account':{'id':'17841400007654321'}}]}
+        self.assertIsNone(choose_linked_professional_ig_id(pages,'999999999'))
+        self.assertEqual(choose_linked_professional_ig_id(pages,'17841400007654321'),
+                         '17841400007654321')
+
+    def test_invalid_id_100_recovers_using_single_linked_professional(self):
+        http=FakeHttp([
+            FakeResponse(200,{'id':'123'}),
+            FakeResponse(400,{'error':{'code':100,'message':'unknown username field'}}),
+            FakeResponse(200,{'data':[{'id':'1122','instagram_business_account':{'id':'17841400001234567'}}]}),
+            FakeResponse(200,{'id':'17841400001234567','username':'ownbusiness'}),
+            FakeResponse(200,{'business_discovery':{'username':'aimortal.ig','media':{'data':[{
+                'permalink':'https://www.instagram.com/reel/DgGHCjZIZtW/',
+                'media_type':'VIDEO','media_url':'https://scontent.cdninstagram.com/a.mp4'
+            }]}}})
+        ])
+        r=check_meta_business_access('fixture','112233445566','1',http=http)
+        self.assertEqual(r['status'],'original_media_url_available')
+        self.assertEqual(r['resolved_from_linked_page'],True)
+        self.assertNotIn('17841400001234567',str(r))
+        self.assertEqual(len(http.calls),5)
+
+    def test_missing_page_access_is_diagnostic_not_token_error(self):
+        http=FakeHttp([
+            FakeResponse(200,{'id':'123'}),
+            FakeResponse(400,{'error':{'code':100,'message':'unsupported field'}}),
+            FakeResponse(400,{'error':{'code':10,'message':'lack of pages_show_list'}})
+        ])
+        r=check_meta_business_access('fixture','112233445566','1',http=http)
+        self.assertEqual(r['status'],'linked_page_access_denied')
+        self.assertTrue(r['token_valid'])
+
 if __name__=='__main__':unittest.main()
