@@ -51,7 +51,7 @@ describe earlier snapshots and must not be mistaken for current state.
 ## 2026-11-24 — Cloudflare token confirmed; URL-first ASR and hosted vision adapters
 
 **Cloudflare**: The dedicated `reelbrain-resilience-clock` Worker now has a
-private `GITHUB_TOKEN` secret and its half-hour Cron Trigger is deployed.
+private `GITHUB_TOKEN` secret and its verified 5-minute Cron Trigger (`*/5 * * * *`) are deployed. The existing secret triggered real `workflow_dispatch` runs, and no repository token changes are required.
 The original Worker uses `workflow_dispatch` (not
 `repository_dispatch`), so **do not follow the differently named token
 or workflow path proposed in the uploaded third-party research report**.

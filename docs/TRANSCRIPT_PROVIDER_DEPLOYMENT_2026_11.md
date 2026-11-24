@@ -6,7 +6,7 @@ Last audited: 2026-11-24. This is **not** a claim that the six queued Reels have
 The user added a **classic GitHub PAT** to the existing dedicated Cloudflare Worker
 secret named `GITHUB_TOKEN`, which was verified through Cloudflare's
 **secret metadata API** without reading or printing the credential. The
-`*/30 * * * *` Cron Trigger remains deployed.
+`*/5 * * * *` Cron Trigger is now deployed and verified (changed 2026-11-24 11:20 UTC; propagation can take up to 15 minutes).
 
 Important: the uploaded TinyFish report assumes a *different implementation*
 (`GITHUB_DISPATCH_TOKEN` + `repository_dispatch` and Contents:Write).
