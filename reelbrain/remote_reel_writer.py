@@ -4,7 +4,7 @@ Saves each source observation plus its locator and citations; never upgrades mod
 inference to independent verification. Transactional, idempotent writes.
 """
 from __future__ import annotations
-import json
+import json,re
 from .store import KnowledgeStore
 from .sources import canonicalize_instagram
 from .media_evidence_summary import build_media_summary
@@ -15,6 +15,11 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
     canonical=canonicalize_instagram(url)
     source_id=result.get('source_id')
     if not isinstance(source_id,str) or not source_id:raise RemoteWriteError('local result has no source receipt')
+    media_sha=result.get('media_sha256')
+    if not isinstance(media_sha,str) or not re.fullmatch(r'[0-9a-f]{64}',media_sha):
+        raise RemoteWriteError('real local media SHA256 is required for remote persistence')
+    if not result.get('processing_receipt_id'):
+        raise RemoteWriteError('actual media receipt required for remote persistence')
     source=local.con.execute('SELECT id FROM sources WHERE id=? AND tenant=?',(source_id,result.get('tenant','personal'))).fetchone()
     if source is None:
         # Older engine results do not have tenant field; reference by globally unique source ID.
@@ -35,10 +40,16 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
                 (canonical_url,local_source_id,status,media_sha256,completeness,stage_timings,stage_errors)
                 values (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)
                 on conflict(canonical_url) do update set
-                  status=excluded.status,local_source_id=excluded.local_source_id,
+                  status=CASE WHEN reelbrain_research.reel_sources.status='evidence_saved'
+                       THEN 'evidence_saved' ELSE excluded.status END,
+                  local_source_id=excluded.local_source_id,
+                  media_sha256=CASE WHEN reelbrain_research.reel_sources.status='evidence_saved'
+                       AND reelbrain_research.reel_sources.media_sha256 IS NOT NULL
+                       THEN reelbrain_research.reel_sources.media_sha256
+                       ELSE excluded.media_sha256 END,
                   completeness=excluded.completeness,stage_timings=excluded.stage_timings,
                   stage_errors=excluded.stage_errors,updated_at=now()''',
-                (canonical,source_id,status,None,result.get('knowledge_completeness','NOT_AUDITED'),
+                (canonical,source_id,status,media_sha,result.get('knowledge_completeness','NOT_AUDITED'),
                  json.dumps(result.get('stage_timings_ms',{})),json.dumps(result.get('stage_errors',{}))))
             for ev in observations:
                 cur.execute('''insert into reelbrain_research.reel_observations(source_url,observation_id,evidence_kind,locator,verbatim)
