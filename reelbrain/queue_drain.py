@@ -45,7 +45,7 @@ def drain_ready_queue(
         for item in result:
             if not isinstance(item,dict):
                 raise RuntimeError('Worker returned malformed job result')
-            if item.get('status') in ('deferred_access','retry_or_dead_letter') and not item.get('acknowledged_failure'):
+            if item.get('status') in ('deferred_access','deferred_model_quota','retry_or_dead_letter') and not item.get('acknowledged_failure'):
                 raise RuntimeError('Durable job failure was not acknowledged')
         outcomes.extend(result)
         if not result:
