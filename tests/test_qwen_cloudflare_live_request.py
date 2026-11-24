@@ -56,7 +56,6 @@ class QwenCloudflareRequestTests(unittest.TestCase):
             self.assertNotIn('reasoning_effort',c.body)
             self.assertNotIn('response_format',c.body)
 
-if __name__=='__main__':unittest.main()
 
     def test_timeout_is_distinct_and_never_leaks_transport_details(self):
         import httpx
@@ -82,3 +81,5 @@ if __name__=='__main__':unittest.main()
             Image.new('RGB',(320,170),'white').save(p)
             model=QwenVLResearcher('https://custom-qwen.example/v1',client=EmptyHTTP())
             with self.assertRaises(QwenPartialVisualError):model.analyze(p)
+
+if __name__=='__main__':unittest.main()
