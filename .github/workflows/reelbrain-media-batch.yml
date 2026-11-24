@@ -29,6 +29,11 @@ jobs:
     timeout-minutes: 14
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+      # Separate URL-first speech API. BOTH approval variables are required;
+      # completely inert if unset. Hard capped to 2 reserved calls per UTC day.
+      REELBRAIN_HOSTED_TRANSCRIPT_ENABLED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_ENABLED || '0' }}
+      REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED: ${{ vars.REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED || '0' }}
+      REELBRAIN_TRANSCRIPT_API_KEY: ${{ secrets.REELBRAIN_TRANSCRIPT_API_KEY }}
       REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED: '1'
       REELBRAIN_MEDIA_ACQUISITION: ${{ vars.REELBRAIN_MEDIA_ACQUISITION || 'yt_dlp_public' }}
       REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD: '1'
@@ -105,6 +110,20 @@ jobs:
           print('Eligible media jobs:', eligible_jobs)
           if not eligible_jobs:
               print('Queue empty or all sources deferred: skipping heavy installs safely.')
+          PY
+      - name: URL-first speech transcript (optional and strict-credit-capped)
+        if: ${{ steps.secret_check.outputs.ready == 'true' && vars.REELBRAIN_HOSTED_TRANSCRIPT_ENABLED == '1' && vars.REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED == '1' }}
+        shell: bash
+        run: |
+          # psycopg is installed in the lightweight queue eligibility step.
+          python -m pip install --disable-pip-version-check 'httpx>=0.27,<1'
+          python - <<'PY'
+          from reelbrain.hosted_transcript_job import run_one_hosted_transcript
+          result=run_one_hosted_transcript()
+          # Only status/count; no Reel URL, account detail, API token or
+          # raw provider response is printed or logged.
+          print('URL-first speech:',result['status'])
+          print('Reserved provider requests:',result['requests_sent'])
           PY
       - name: Cache open-source Whisper model weights (no user data)
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
