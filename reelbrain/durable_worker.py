@@ -107,8 +107,10 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                 # carousel. Every page must pass media-byte validation.
                 # The optional user-managed session is a private, transient
                 # alternative when Instagram rejects anonymous datacenter IPs.
+                from .meta_business_media import acquire_with_meta_fallback
                 with temporary_instagram_cookies() as cookies:
-                    bundle=acquire_public_bundle(source_url,Path(d),cookies_file=cookies)
+                    bundle=acquire_with_meta_fallback(
+                        source_url,Path(d),pg,cookies_file=cookies)
                 result=engine_factory(db).ingest(
                     list(bundle.paths),source_url,
                     allow_external=(flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')

@@ -48,6 +48,12 @@ jobs:
       # Optional private Netscape cookies.txt, encoded as base64.
       # Do not use a repository variable or commit cookies to git.
       REELBRAIN_INSTAGRAM_COOKIES_B64: ${{ secrets.REELBRAIN_INSTAGRAM_COOKIES_B64 }}
+      # Official free read-only Media fallback for another public professional
+      # creator; only after original public extractor genuinely fails.
+      # App permissions/media_url are not guaranteed by a valid Meta token.
+      REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED: ${{ vars.REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED || '0' }}
+      REELBRAIN_META_IG_USER_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
+      REELBRAIN_META_GRAPH_TOKEN: ${{ secrets.REELBRAIN_META_GRAPH_TOKEN }}
       # Free open-source CPU speech fallback (downloaded/cached on demand).
       REELBRAIN_ENABLE_LOCAL_ASR: '1'
       REELBRAIN_LOCAL_ASR_MODEL: 'small'
