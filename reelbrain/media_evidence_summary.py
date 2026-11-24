@@ -21,7 +21,8 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
         errors = {}
     source = []
     model = []
-    for ev in observations[:240]:
+    for ev in observations:
+        if len(source)>=80 and len(model)>=80:break
         if not isinstance(ev, dict):
             continue
         kind = str(ev.get('kind', 'unknown'))[:32]
