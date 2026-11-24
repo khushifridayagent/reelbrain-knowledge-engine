@@ -133,9 +133,9 @@ jobs:
           python - <<'PY'
           from reelbrain.hosted_transcript_job import run_hosted_transcript_drain
           # Only a PER-RUN time bound for GitHub's 14-minute job; there is
-          # NO arbitrary daily incoming-Reel limit. New submissions remain
+          # NO arbitrary daily incoming-Reel limit; drain up to four New submissions remain
           # queued and resume at the next 5-minute/Cloudflare-triggered tick.
-          result=run_hosted_transcript_drain(max_jobs_per_tick=2,max_seconds=100)
+          result=run_hosted_transcript_drain(max_jobs_per_tick=4,max_seconds=210)
           print('URL-first speech:',result['status'])
           print('Verified transcripts persisted:',result['jobs_completed'])
           print('Provider starts attempted:',result['provider_starts'])
