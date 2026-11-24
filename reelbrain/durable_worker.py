@@ -139,6 +139,21 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
             try:
                 r=processor(url,pg) if processor else process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'))
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
+                quota_retry=r.get('transient_model_retry_seconds')
+                if r.get('status')=='partial' and isinstance(quota_retry,int) and 900<=quota_retry<=86400:
+                    # Model Neuron/ASR quota exhausted: preserve all saved
+                    # evidence, then return the original source to the durable
+                    # queue until capacity resets. Do NOT mark partial as
+                    # terminal or burn finite source attempts on free quotas.
+                    with pg.cursor() as cur:
+                        cur.execute('select public.reelbrain_defer_dm_job(%s,%s,%s,%s)',
+                                    (job_id,token,'Transient model rate/quota pause',quota_retry))
+                        ok=cur.fetchone()[0]
+                    pg.commit()
+                    if not ok:raise RuntimeError('Failed to acknowledge model quota deferral')
+                    done.append({'id':job_id,'status':'deferred_model_quota',
+                                 'source_url':url,'acknowledged_failure':True})
+                    continue
                 with pg.cursor() as cur:
                     cur.execute('select public.reelbrain_finish_dm_job(%s,%s,%s,%s::jsonb)',
                                 (job_id,token,'partial' if r['status']=='partial' else 'processed',json.dumps(r)))
