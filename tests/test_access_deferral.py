@@ -60,5 +60,31 @@ class AccessDeferralTests(unittest.TestCase):
         self.assertIn('reelbrain_fail_dm_job',sql)
         self.assertNotIn('reelbrain_defer_dm_job',sql)
 
+
+    def test_invalid_meta_token_is_provider_cooldown_not_software_failure(self):
+        from reelbrain.access_backoff import access_backoff_seconds
+        self.assertEqual(access_backoff_seconds(PublicMediaError(
+            'Public media unavailable: Meta Graph token_expired_or_invalid')),86400)
+
+    def test_partial_with_bad_retry_hint_cannot_be_terminal(self):
+        from reelbrain.durable_worker import run_one_batch
+        conn=Connection()
+        def partial(*args):
+            return {'persisted_in_postgres':True,'status':'partial',
+                    'transient_model_retry_seconds':1}
+        with patch('reelbrain.durable_worker.pg_open',return_value=conn):
+            result=run_one_batch({'db_url':'fixture://','apify_token':''},processor=partial)
+        self.assertEqual(result[0]['status'],'deferred_model_quota')
+        self.assertNotIn('reelbrain_finish_dm_job','\n'.join(q for q,_ in conn.sql))
+
+    def test_unknown_persisted_status_cannot_finish_as_processed(self):
+        from reelbrain.durable_worker import run_one_batch
+        conn=Connection()
+        with patch('reelbrain.durable_worker.pg_open',return_value=conn):
+            result=run_one_batch({'db_url':'fixture://','apify_token':''},
+                processor=lambda *a:{'persisted_in_postgres':True,'status':'unknown'})
+        self.assertEqual(result[0]['status'],'retry_or_dead_letter')
+        self.assertNotIn('reelbrain_finish_dm_job','\n'.join(q for q,_ in conn.sql))
+
 if __name__ == '__main__':
     unittest.main()

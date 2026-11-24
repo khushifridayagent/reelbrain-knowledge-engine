@@ -33,7 +33,9 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
     if any(r['evidence_id'] not in valid_obs for r in resources):raise RemoteWriteError('citation references evidence outside the source')
     if not observations:raise RemoteWriteError('no real source observations to persist')
     # Absence of audio/visual/verification: partial is an honest receipt, not a fully understood Reel.
-    status='partial' if result.get('status')=='partial' or result.get('unattempted_modalities') else 'evidence_saved'
+    from .resumable_media import required_incomplete_stages
+    incomplete=required_incomplete_stages(result)
+    status='partial' if result.get('status')=='partial' or incomplete else 'evidence_saved'
     with pg.transaction():
         with pg.cursor() as cur:
             cur.execute('''insert into reelbrain_research.reel_sources
@@ -87,11 +89,12 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
                  json.dumps([source_trace],ensure_ascii=False),
                  summary['video_analyzed'],summary['audio_transcribed'],
                  summary['ocr_analyzed'],summary['processing_stage']))
-    from .model_quota_retry import model_quota_retry_seconds
+    from .resumable_media import retry_seconds
     # Preserve successful OCR/ASR even when a remote model quota is exhausted.
     # Return a numeric retry hint only; never print provider error bodies.
-    retry_after=(model_quota_retry_seconds(result.get('stage_errors'))
+    retry_after=(retry_seconds({stage:(result.get('stage_errors') or {}).get(stage,'required modality not attempted') for stage in incomplete}) or 3600
                  if status=='partial' else None)
     return {'source_url':canonical,'source_id':source_id,'observation_count':len(observations),
             'resource_citations':len(resources),'status':status,'persisted_in_postgres':True,
-            'transient_model_retry_seconds':retry_after}
+            'transient_model_retry_seconds':retry_after,
+            'incomplete_stages':incomplete}

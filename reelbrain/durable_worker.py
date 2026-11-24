@@ -12,6 +12,7 @@ import json,os,time
 from pathlib import Path
 from urllib.parse import urlsplit
 from contextlib import contextmanager
+from .resumable_media import stage_slot
 from .store import KnowledgeStore
 from .remote_reel_writer import save_reel_to_postgres
 from .link_processor import process_instagram_link, LinkProcessingOptions
@@ -81,11 +82,12 @@ def reusable_hosted_audio(pg,source_url:str)->str|None:
     return record['provider']
 
 
-def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->dict:
+def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',lease=None)->dict:
     from tempfile import TemporaryDirectory
     from .public_bundle import acquire_public_bundle
     from .session_cookies import temporary_instagram_cookies
     hosted_audio=reusable_hosted_audio(pg,source_url) if acquisition=='yt_dlp_public' else None
+    if lease:pg.commit()
     if hosted_audio:print('HOSTED_AUDIO_REUSED provider='+hosted_audio,flush=True)
     with TemporaryDirectory(prefix='rb_reel_worker_') as d:
         db=KnowledgeStore(Path(d)/'isolated_evidence.sqlite')
@@ -108,7 +110,7 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                         cf_vision['base_url'],
                         model=cf_vision['model'],
                         api_key=cf_vision['api_key'],
-                        max_frames=8)
+                        max_frames=4,max_batches=8)
                 elif generic_external_allowed and os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
                     from .qwen_vl import QwenVLResearcher
                     vlm=QwenVLResearcher(
@@ -131,17 +133,21 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                 # The optional user-managed session is a private, transient
                 # alternative when Instagram rejects anonymous datacenter IPs.
                 from .scrapecreators_media import acquire_with_public_provider
-                with temporary_instagram_cookies() as cookies:
-                    bundle=acquire_with_public_provider(
-                        source_url,Path(d),pg,cookies_file=cookies)
+                with stage_slot('download'):
+                    with temporary_instagram_cookies() as cookies:
+                        bundle=acquire_with_public_provider(
+                            source_url,Path(d),pg,cookies_file=cookies)
+                if lease:pg.commit()
                 print('MEDIA_ACQUIRED provider='+bundle.provider+
                       ' assets='+str(len(bundle.paths))+
                       ' bytes='+str(sum(p.stat().st_size for p in bundle.paths)),flush=True)
                 print('VISUAL_ANALYSIS_STARTED',flush=True)
-                result=engine_factory(db).ingest(
-                    list(bundle.paths),source_url,
-                    allow_external=(flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
-                                    or flag('REELBRAIN_CLOUDFLARE_VISION_ENABLED')))
+                with stage_slot('analysis'):
+                    result=engine_factory(db).ingest(
+                        list(bundle.paths),source_url,
+                        allow_external=(flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
+                                        or flag('REELBRAIN_CLOUDFLARE_VISION_ENABLED')),
+                        **({'checkpoint': lease_checkpoint(pg,lease,source_url,bundle.paths)} if lease else {}))
                 result={**result,'media_processed':bool(result.get('processing_receipt_id')),
                         'provider':bundle.provider,'media_deleted_after_processing':True,
                         'hosted_audio_reused':hosted_audio}
@@ -155,34 +161,103 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                 raise RuntimeError('provider returned no locally processed media; refusing success status')
             print('MEDIA_ANALYSIS_FINISHED status='+str(result.get('status'))+
                   ' observation_counts='+json.dumps(result.get('stage_observations',{})),flush=True)
-            saved=save_reel_to_postgres(db,pg,source_url,result)
+            with stage_slot('storage'):
+                if lease:
+                    with pg.transaction():
+                        assert_lease(pg,lease)
+                        saved=save_reel_to_postgres(db,pg,source_url,result)
+                else:
+                    saved=save_reel_to_postgres(db,pg,source_url,result)
             print('KNOWLEDGE_PERSISTED observations='+str(saved.get('observation_count',0))+
                   ' status='+str(saved.get('status')),flush=True)
             return saved
         finally:db.close()
 
+def assert_lease(pg,lease):
+    with pg.cursor() as cur:
+        cur.execute("""select id from public.reelbrain_dm_jobs
+            where id=%s and lease_token=%s and status='leased'
+            and lease_until>now() for update""",lease)
+        if not cur.fetchone():raise RuntimeError('lost lease before evidence write')
+
+
+def lease_checkpoint(pg,lease,source_url,paths):
+    from .stage_checkpoint import StageCheckpoint
+    return StageCheckpoint(pg,lease,source_url,paths)
+
+
+@contextmanager
+def renewable_lease(config,job_id,token):
+    """Renew using a separate connection; never share the worker transaction."""
+    from threading import Event,Thread
+    stop=Event()
+    lost=Event()
+    def heartbeat():
+        while not stop.wait(60):
+            try:
+                with pg_open(config['db_url']) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""update public.reelbrain_dm_jobs
+                            set lease_until=now()+interval '15 minutes'
+                            where id=%s and status='leased' and lease_token=%s
+                            and lease_until>now() returning id""",(job_id,token))
+                        if not cur.fetchone():
+                            lost.set()
+                            return
+            except Exception:
+                lost.set()
+                return
+    thread=Thread(target=heartbeat,daemon=True)
+    thread.start()
+    try:
+        yield lost
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+
+
 def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[dict]:
     config=config or checked_config()
     with pg_open(config['db_url']) as pg:
         with pg.cursor() as cur:
-            cur.execute('select public.reelbrain_reap_expired_dm_jobs(%s)',(100,))
+            # A crashed or canceled runner is not a failed Reel. Recover
+            # expired leases without consuming another source attempt.
+            cur.execute("""update public.reelbrain_dm_jobs
+                set status='queued', attempts=greatest(0,attempts-1),
+                    lease_token=null,lease_until=null,available_at=now(),
+                    updated_at=now(),last_error='Previous runner lease expired; resume pending stages'
+                where status='leased' and lease_until<now()""")
+            from .resumable_media import RECOVERABLE_TERMINAL_SQL
+            cur.execute("""update public.reelbrain_dm_jobs
+                set status='queued',attempts=least(attempts,greatest(0,max_attempts-1)),
+                    lease_token=null,lease_until=null,available_at=now(),updated_at=now()
+                where """+RECOVERABLE_TERMINAL_SQL)
             cur.execute('select id,source_url,lease_token from public.reelbrain_claim_dm_jobs(%s,%s)',(min(10,max(1,batch_size)),900))
             claimed=cur.fetchall()
         pg.commit()
         done=[]
         for job_id,url,token in claimed:
             try:
-                r=processor(url,pg) if processor else process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'))
+                if processor:
+                    r=processor(url,pg)
+                else:
+                    with renewable_lease(config,job_id,token) as lost:
+                        r=process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'),lease=(job_id,token))
+                        if lost.is_set():raise RuntimeError('worker lease renewal lost')
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
                 quota_retry=r.get('transient_model_retry_seconds')
-                if r.get('status')=='partial' and isinstance(quota_retry,int) and 900<=quota_retry<=86400:
+                if r.get('status') not in ('partial','evidence_saved'):
+                    raise RuntimeError('Unrecognized persisted media status')
+                if r.get('status')=='partial':
+                    if type(quota_retry) is not int or not 900<=quota_retry<=86400:
+                        quota_retry=3600
                     # Model Neuron/ASR quota exhausted: preserve all saved
                     # evidence, then return the original source to the durable
                     # queue until capacity resets. Do NOT mark partial as
                     # terminal or burn finite source attempts on free quotas.
                     with pg.cursor() as cur:
                         cur.execute('select public.reelbrain_defer_dm_job(%s,%s,%s,%s)',
-                                    (job_id,token,'Transient model rate/quota pause',quota_retry))
+                                    (job_id,token,'Incomplete media stage; automatic retry',quota_retry))
                         ok=cur.fetchone()[0]
                     pg.commit()
                     if not ok:raise RuntimeError('Failed to acknowledge model quota deferral')
@@ -191,7 +266,7 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                     continue
                 with pg.cursor() as cur:
                     cur.execute('select public.reelbrain_finish_dm_job(%s,%s,%s,%s::jsonb)',
-                                (job_id,token,'partial' if r['status']=='partial' else 'processed',json.dumps(r)))
+                                (job_id,token,'processed',json.dumps(r)))
                     ok=cur.fetchone()[0]
                 pg.commit()
                 if not ok:raise RuntimeError('lost lease while finalizing durable job')
@@ -200,7 +275,9 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                 from .access_backoff import access_backoff_seconds
                 seconds_to_wait=access_backoff_seconds(exc)
                 pg.rollback()
-                reason=(type(exc).__name__+': '+str(exc))[:350]
+                reason=type(exc).__name__+': media worker stage incomplete'
+                if seconds_to_wait is not None:
+                    reason=type(exc).__name__+': '+str(exc)[:300]
                 with pg.cursor() as cur:
                     if seconds_to_wait is not None:
                         # A datacenter 403/429 must not burn a Reel's finite

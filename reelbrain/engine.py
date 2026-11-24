@@ -56,7 +56,7 @@ class LocalPipelineEngine:
 
     def ingest(self,media_path:str|Path|list[Path]|tuple[Path,...],source_url:str,
                tenant:str='personal',allow_external:bool=False,
-               extra_observations:list[Observation]|None=None)->dict:
+               extra_observations:list[Observation]|None=None,checkpoint=None)->dict:
         """Ingest a single video or a full 1–20-page mixed carousel.
 
         Each slide keeps its own evidence locator; one canonical source and
@@ -113,7 +113,7 @@ class LocalPipelineEngine:
             return observations
         visual_coverage_gaps=[]
         def video_understanding():
-            from .qwen_vl import QwenPartialVisualError
+            from .qwen_vl import QwenPartialVisualError,QwenVLResearcher
             observations=[]
             for idx,asset in enumerate(media_assets,1):
                 # Every static carousel slide gets its own visual pass; no
@@ -127,7 +127,10 @@ class LocalPipelineEngine:
                             ev.text,kind='model_inference',
                             locator=locator,confidence=ev.confidence))
                 try:
-                    add_results(self.video_model.analyze(asset))
+                    if checkpoint is not None and isinstance(self.video_model,QwenVLResearcher):
+                        add_results(self.video_model.analyze(asset,checkpoint=checkpoint,asset_index=idx))
+                    else:
+                        add_results(self.video_model.analyze(asset))
                     stats=getattr(self.video_model,'sampling_stats',None)
                     if isinstance(stats,dict) and stats.get('partial_scan'):
                         visual_coverage_gaps.append(
@@ -143,6 +146,7 @@ class LocalPipelineEngine:
                     category='quota exceeded' if 'quota' in str(exc).lower() else (
                         'service unavailable' if 'unavailable' in str(exc).lower()
                         else 'visual model request failed')
+                    if isinstance(exc,QwenPartialVisualError):category=str(exc)
                     raise QwenPartialVisualError(category,observations) from None
             return observations
         tasks={'ocr':read_all_pages}
@@ -153,7 +157,13 @@ class LocalPipelineEngine:
             start=time.monotonic()
             try:return func(),int((time.monotonic()-start)*1000)
             except Exception:raise
-        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        if checkpoint:
+            for label in list(tasks):
+                cached=checkpoint.load(label)
+                if cached is not None:
+                    results[label],measurements[label]=cached
+                    del tasks[label]
+        with ThreadPoolExecutor(max_workers=max(1,len(tasks))) as pool:
             pending={pool.submit(timed,label,fn):label for label,fn in tasks.items()}
             for future in as_completed(pending):
                 stage=pending[future]
@@ -176,6 +186,9 @@ class LocalPipelineEngine:
                             for ev in partial):
                             results[stage]=partial[:120]
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
+                if checkpoint and stage in results and stage not in errors and not (
+                    (stage=='ocr' and slide_failures) or (stage=='vlm' and visual_coverage_gaps)):
+                    checkpoint.save(stage,results[stage],measurements[stage])
         if slide_failures:
             errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
         if visual_coverage_gaps:
@@ -234,6 +247,6 @@ class LocalPipelineEngine:
             saved['processing_receipt_id']=receipt
             saved['media_sha256']=sha.hexdigest()
         saved.update({'stage_errors':errors,'stage_timings_ms':measurements,'stage_observations':{**{k:len(v) for k,v in results.items()},'provided':len(extra)},'external_calls':external_count,'media_is_local':True,
-                      'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),
+                      'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),'audio_required':bool(video_assets),
                       'unattempted_modalities':([stage for stage,active in (('asr',self.audio_model is not None),('video_model',self.video_model is not None),('structured_fact_model',self.fact_model is not None)) if not active])})
         return saved

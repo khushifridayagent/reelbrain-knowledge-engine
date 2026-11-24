@@ -22,4 +22,16 @@ class ProductionMediaRouting(unittest.TestCase):
         self.assertIn("vars.REELBRAIN_LEGACY_WORKER_ENABLED == '1'",workflow)
         self.assertIn('group: reelbrain-media-batch',workflow)
 
+
+    def test_permanent_meta_secret_is_preferred_and_canary_uses_same_secret(self):
+        for name in ('reelbrain-media-batch.yml','reelbrain-meta-access-canary.yml'):
+            workflow=(ROOT/name).read_text()
+            line=next(l for l in workflow.splitlines() if l.strip().startswith('REELBRAIN_META_GRAPH_TOKEN:'))
+            self.assertIn('secrets.REELBRAIN_META_PERMANENT_TOKEN',line)
+            self.assertLess(line.index('secrets.REELBRAIN_META_PERMANENT_TOKEN'),
+                            line.index('secrets.REELBRAIN_META_GRAPH_TOKEN'))
+        canary=(ROOT/'reelbrain-meta-access-canary.yml').read_text()
+        self.assertIn('META_PERMANENT_AUTH',canary)
+        self.assertIn('check_meta_business_access',canary)
+
 if __name__=='__main__':unittest.main()

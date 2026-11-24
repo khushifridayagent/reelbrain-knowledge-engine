@@ -8,6 +8,8 @@ OCR/QR source evidence. Bound batches to the GitHub runner and model quota.
 from __future__ import annotations
 
 import base64
+import hashlib
+import time
 import ipaddress
 import json
 import math
@@ -54,10 +56,15 @@ class QwenVLResearcher:
             p.scheme!='https' and not (p.scheme=='http' and loopback)
         ) or not p.path.rstrip('/').endswith('/v1'):
             raise ValueError('Qwen endpoint must be HTTPS /v1 or local loopback HTTP /v1')
-        if not 1<=max_frames<=8 or not 1<=max_batches<=4:
-            raise ValueError('Visual batches must fit 1–8 images, 1–4 calls per video')
+        if not 1<=max_frames<=8 or not 1<=max_batches<=8 or max_frames*max_batches>32:
+            raise ValueError('Visual budget must fit 1–8 images per call and at most 32 images per video')
         if not model or len(model)>120:raise ValueError('Qwen model identifier required')
         self.url=base_url.rstrip('/')+'/chat/completions'
+        self.cloudflare_direct=(host=='api.cloudflare.com' and
+            bool(re.fullmatch(r'/client/v4/accounts/[a-fA-F0-9]{32}/ai/v1',p.path.rstrip('/')))
+            and model=='@cf/qwen/qwen3.8-27b')
+        if self.cloudflare_direct:
+            self.url=base_url.rstrip('/')[:-3]+'/run/'+model
         self.model=model
         self.key=api_key
         self.max_frames=max_frames
@@ -80,7 +87,7 @@ class QwenVLResearcher:
         if not ok:raise RuntimeError('Could not encode a sampled visual frame')
         return label,payload.tobytes()
 
-    def _sample(self,path:Path)->list[tuple[str,bytes]]:
+    def _sample(self,path:Path,*,all_scenes=False,window_start=0.0)->list[tuple[str,bytes]]:
         import cv2
         import numpy as np
         from .keyframes import dhash, hamming
@@ -104,12 +111,12 @@ class QwenVLResearcher:
             total=float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             if not math.isfinite(fps) or fps<=0:fps=25
             duration=total/fps if total>0 else 180.0
-            scan_until=min(duration,300.0)
+            scan_until=min(duration,window_start+300.0)
             # Seek to ~2 fps for scene coverage; the separate QR/Tesseract
             # passes scan faster for transient links and short-lived words.
-            times=np.arange(0,scan_until,0.5).tolist()
-            if duration>0 and duration<300:
-                times.append(max(0.0,duration-0.08))
+            times=np.arange(window_start,scan_until,0.5).tolist()
+            if duration>window_start and duration<=scan_until:
+                times.append(max(window_start,duration-0.08))
             candidates=[]
             prev_hash=prev_gray=None
             last_t=-100.0
@@ -132,16 +139,16 @@ class QwenVLResearcher:
             if not candidates:raise RuntimeError('No video frames decoded')
         finally:cap.release()
         budget=self.max_frames*self.max_batches
-        if len(candidates)>budget:
-            ids=sorted({round(i*(len(candidates)-1)/(budget-1))
-                        for i in range(budget)})
+        if not all_scenes and len(candidates)>budget:
+            ids=([0] if budget==1 else sorted({round(i*(len(candidates)-1)/(budget-1))
+                        for i in range(budget)}))
             selected=[candidates[index] for index in ids]
         else:
             selected=candidates
         self.sampling_stats={'kind':'video','candidate_scenes':len(candidates),
                              'selected_scenes':len(selected),
-                             'duration_seconds':duration,
-                             'partial_scan':bool(duration>300 or len(selected)<len(candidates))}
+                             'duration_seconds':duration,'window_end_seconds':scan_until,
+                             'partial_scan':bool(duration>scan_until or len(selected)<len(candidates))}
         return selected
 
     @staticmethod
@@ -154,12 +161,45 @@ class QwenVLResearcher:
             raise ValueError('Unstructured Qwen observations')
         return entries
 
-    def analyze(self,path:Path)->list[Observation]:
+    def _batches(self,path,checkpoint):
+        window_start=0.0
+        while True:
+            frames=(self._sample(path,all_scenes=True,window_start=window_start)
+                    if checkpoint is not None else self._sample(path))
+            stats=dict(self.sampling_stats)
+            for start in range(0,len(frames),self.max_frames):
+                yield frames[start:start+self.max_frames]
+            if checkpoint is None or stats.get('kind')!='video':
+                break
+            end=stats.get('window_end_seconds',0)
+            if end>=stats.get('duration_seconds',0):
+                break
+            if end<=window_start:raise RuntimeError('Visual scan window did not advance')
+            window_start=end
+        if checkpoint is not None:self.sampling_stats['partial_scan']=False
+
+    def _batch_key(self,asset_index,batch):
+        digest=hashlib.sha256()
+        digest.update((self.model+'|'+self.PROMPT+'|'+str(asset_index)).encode())
+        for label,raw in batch:
+            digest.update(label.encode()+b'\\x00'+hashlib.sha256(raw).digest())
+        return 'vlm-batch:'+digest.hexdigest()
+
+    def analyze(self,path:Path,*,checkpoint=None,asset_index=0)->list[Observation]:
         import httpx
-        frames=self._sample(Path(path))
         retained=[]
-        for batch_no,start in enumerate(range(0,len(frames),self.max_frames),1):
-            batch=frames[start:start+self.max_frames]
+        new_batches=0
+        for batch_no,batch in enumerate(self._batches(Path(path),checkpoint),1):
+            unit=self._batch_key(asset_index,batch) if checkpoint is not None else None
+            if checkpoint is not None:
+                cached=checkpoint.load('vlm',unit=unit)
+                if cached is not None:
+                    retained.extend(cached[0])
+                    continue
+                if new_batches>=self.max_batches:
+                    raise QwenPartialVisualError('visual coverage pending: resume checkpointed batches',retained)
+            new_batches+=1
+            began=time.monotonic()
             listing='; '.join(f'frame:{i} @ {label}' for i,(label,_) in enumerate(batch))
             contents=[{'type':'text','text':self.PROMPT+'\nFrames: '+listing}]
             for _label,raw in batch:
@@ -172,8 +212,9 @@ class QwenVLResearcher:
             # without returning a message.content (finish_reason=length).
             # Cloudflare documents reasoning_effort=low and JSON mode;
             # use both only for that verified provider.
-            if (self.model.startswith('@cf/qwen/') and
-                    self.url.startswith('https://api.cloudflare.com/')):
+            if self.cloudflare_direct:
+                body.pop('model',None)
+                body.pop('max_tokens',None)
                 body.update({
                     'reasoning_effort':'low',
                     'response_format':{'type':'json_object'},
@@ -183,17 +224,29 @@ class QwenVLResearcher:
             if self.key:headers['Authorization']='Bearer '+self.key
             try:
                 response=(self.client or httpx).post(
-                    self.url,json=body,headers=headers,timeout=85)
+                    self.url,json=body,headers=headers,timeout=120 if self.cloudflare_direct else 85)
                 code=getattr(response,'status_code',200)
                 if code in (402,429):
                     raise QwenPartialVisualError('quota exceeded',retained)
-                if code in (502,503,504):
+                if code in (502,503,504,522,524):
                     raise QwenPartialVisualError('service unavailable',retained)
+                if code>=400:
+                    from .resumable_media import classify_model_http
+                    raise QwenPartialVisualError(classify_model_http(code),retained)
                 response.raise_for_status()
-                content=response.json()['choices'][0]['message']['content']
+                payload=response.json()
+                if self.cloudflare_direct:
+                    if payload.get('success') is not True:
+                        raise QwenPartialVisualError('Cloudflare visual response unsuccessful',retained)
+                    payload=payload['result']
+                choice=payload['choices'][0]
+                if choice.get('finish_reason')=='length':
+                    raise QwenPartialVisualError('visual response token limit reached',retained)
+                content=choice['message']['content']
                 if isinstance(content,list):
                     content=''.join(str(x.get('text','')) for x in content if isinstance(x,dict))
                 entries=self._parse(str(content).strip())
+                previous_count=len(retained)
                 for item in entries:
                     if not isinstance(item,dict):continue
                     desc=str(item.get('description','')).strip()[:3000]
@@ -206,12 +259,20 @@ class QwenVLResearcher:
                         locator=f'qwen3-vl:batch:{batch_no:02d}/unspecified'
                     retained.append(Observation(
                         desc,kind='model_inference',locator=locator))
+                if len(retained)==previous_count:
+                    raise QwenPartialVisualError('empty structured visual observations',retained)
             except QwenPartialVisualError:
                 raise
+            except httpx.TimeoutException:
+                raise QwenPartialVisualError('visual request timeout',retained) from None
+            except httpx.NetworkError:
+                raise QwenPartialVisualError('visual network unavailable',retained) from None
             except (KeyError,IndexError,TypeError,ValueError,json.JSONDecodeError):
                 raise QwenPartialVisualError('invalid structured visual response',retained) from None
             except Exception:
                 # Real upstream errors can contain secret tokens/URLs; never
                 # persist or log their raw repr or response body.
                 raise QwenPartialVisualError('visual model request failed',retained) from None
+            if checkpoint is not None:
+                checkpoint.save('vlm',retained[previous_count:],int((time.monotonic()-began)*1000),unit=unit)
         return retained

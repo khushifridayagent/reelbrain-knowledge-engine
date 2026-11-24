@@ -1,8 +1,10 @@
 name: Reelbrain Meta Graph access canary (six-source byte audit)
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
   push:
-    branches: [main]
+    branches: [main, fix/resumable-overlapping-media]
     paths:
       - '.github/workflows/reelbrain-meta-access-canary.yml'
 permissions:
@@ -16,7 +18,8 @@ jobs:
     timeout-minutes: 8
     env:
       REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
-      REELBRAIN_META_GRAPH_TOKEN: ${{ secrets.REELBRAIN_META_GRAPH_TOKEN }}
+      REELBRAIN_META_GRAPH_TOKEN: ${{ secrets.REELBRAIN_META_PERMANENT_TOKEN || secrets.REELBRAIN_META_GRAPH_TOKEN }}
+      REELBRAIN_META_PERMANENT_CONFIGURED: ${{ secrets.REELBRAIN_META_PERMANENT_TOKEN != '' && '1' || '0' }}
       REELBRAIN_META_IG_USER_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
       REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED: ${{ vars.REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED || '0' }}
     steps:
@@ -37,6 +40,7 @@ jobs:
           from tempfile import TemporaryDirectory
           from urllib.parse import urlsplit
           import psycopg
+          from reelbrain.meta_graph_probe import check_meta_business_access
           from reelbrain.meta_business_media import (
               acquire_meta_bundle, MetaMediaUnavailable, meta_fallback_enabled)
           if not meta_fallback_enabled():
@@ -51,9 +55,20 @@ jobs:
                   cur.execute("""SELECT j.id,j.source_url,k.creator_handle
                       FROM public.reelbrain_dm_jobs j
                       JOIN public.reelbrain_reel_knowledge k USING(source_url)
-                      WHERE j.id BETWEEN 5 AND 10 AND j.status='queued'
-                      ORDER BY j.id""")
+                      WHERE j.status IN ('queued','partial','processed') AND k.creator_handle IS NOT NULL
+                      ORDER BY j.id DESC LIMIT 6""")
                   rows=cur.fetchall()
+          if os.environ.get('REELBRAIN_META_PERMANENT_CONFIGURED') != '1':
+              raise SystemExit('Permanent system-user credential not configured')
+          source=next(((url,creator) for _,url,creator in rows if creator),None)
+          if source:
+              url,creator=source
+              auth=check_meta_business_access(os.environ['REELBRAIN_META_GRAPH_TOKEN'],
+                  os.environ['REELBRAIN_META_IG_USER_ID'],'1',creator=creator,
+                  shortcode=url.rstrip('/').rsplit('/',1)[-1])
+              print('META_PERMANENT_AUTH',auth)
+              if not auth.get('token_valid') or not auth.get('account_id_valid'):
+                  raise SystemExit('Permanent Meta account authorization failed')
           tested=success=0
           for job,url,creator in rows:
               if not creator:
