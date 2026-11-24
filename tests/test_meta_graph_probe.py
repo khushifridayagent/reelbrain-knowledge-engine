@@ -59,7 +59,7 @@ class GraphProbeTests(unittest.TestCase):
                                      creator='aimortal.ig',shortcode='DgGHCjZIZtW',http=http)
         self.assertEqual(r['status'],'original_media_url_available')
         self.assertEqual(r['original_urls'],1)
-        self.assertNotIn('media_url',str(r))
+        self.assertNotIn('scontent.cdninstagram.com',str(r))
     def test_errors_never_disclose_token_or_graph_message(self):
         http=FakeHttp([FakeResponse(400,{'error':{'code':190,'message':'raw Bearer fixture'}})])
         r=check_meta_business_access('fixture','17841400001234567','1',http=http)
