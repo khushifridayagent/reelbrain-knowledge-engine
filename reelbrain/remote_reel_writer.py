@@ -11,6 +11,16 @@ from .media_evidence_summary import build_media_summary
 
 class RemoteWriteError(RuntimeError):pass
 
+def media_persistence_decision(observations,result):
+    """Use the same completion gate for queue status and knowledge projection."""
+    from .resumable_media import required_incomplete_stages
+    incomplete=required_incomplete_stages(result)
+    summary=build_media_summary(observations,result)
+    if summary['processing_stage']!='completed':
+        if not incomplete:incomplete=['completion_evidence']
+        return 'partial',incomplete,summary
+    return 'evidence_saved',incomplete,summary
+
 def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
     canonical=canonicalize_instagram(url)
     source_id=result.get('source_id')
@@ -33,9 +43,7 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
     if any(r['evidence_id'] not in valid_obs for r in resources):raise RemoteWriteError('citation references evidence outside the source')
     if not observations:raise RemoteWriteError('no real source observations to persist')
     # Absence of audio/visual/verification: partial is an honest receipt, not a fully understood Reel.
-    from .resumable_media import required_incomplete_stages
-    incomplete=required_incomplete_stages(result)
-    status='partial' if result.get('status')=='partial' or incomplete else 'evidence_saved'
+    status,incomplete,summary=media_persistence_decision([dict(ev) for ev in observations],result)
     with pg.transaction():
         with pg.cursor() as cur:
             cur.execute('''insert into reelbrain_research.reel_sources
@@ -64,7 +72,6 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
             # Project each real observation into the searchable evidence row without
             # changing the independently researched public metadata/caption.
             # Keep inference separate: a VLM's assertion is NOT verified video proof.
-            summary=build_media_summary([dict(ev) for ev in observations],result)
             source_trace={'kind':'authorized_media_processing',
                           'source_id':source_id,'provider':result.get('provider','unknown'),
                           'modality_audit':'NOT_AUDITED','external_claims_verified':False}
