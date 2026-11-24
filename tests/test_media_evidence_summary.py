@@ -57,4 +57,11 @@ class MediaSummaryTests(unittest.TestCase):
         bad={**good,'stage_observations':{'ocr':1,'vlm':0}}
         self.assertEqual(build_media_summary(events,bad)['processing_stage'],'partial_media')
 
+    def test_ocr_volume_cannot_hide_visual_summary(self):
+        events=[{'kind':'ocr','locator':str(i),'verbatim':'OCR '+str(i)} for i in range(300)]
+        events.append({'kind':'model_inference','locator':'00:02','verbatim':'Visual inference'})
+        out=build_media_summary(events,{'media_processed':True,'stage_observations':{'ocr':300,'vlm':1}})
+        self.assertEqual(len(out['content']['source_observations']),80)
+        self.assertEqual(len(out['content']['model_inferences']),1)
+
 if __name__=='__main__':unittest.main()
