@@ -1,5 +1,53 @@
 # Reelbrain Knowledge Engine
 
+## LIVE VERIFIED — 24 Nov 2026, 16:40 IST
+
+**Cloudflare→GitHub workflow_dispatch:** ✅ verified, no new PAT needed.
+**Supabase connection / URL-first TranscriptFetch:** ✅ live and storing real
+third-party speech transcripts. Initial two successful URLs were the
+Google Compute Engine and Paperclip Reels; retrieved successfully by
+`reelbrain_research.search_reels('dashboard shows every task',12)` with
+`verification_level=third_party_url_speech_transcript`. First-party
+video frames, OCR and complete visual coverage remain **NOT VERIFIED**.
+
+**Elastic queue:** for the selected `transcriptfetch` provider, the old
+`REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT=60` is now ignored as a daily
+work cap. It remains as a legacy safety setting only for ScrapeCreators.
+Every new incoming Reel stays durably queued; each recurring GitHub tick
+takes a small bounded chunk (up to two hosted ASR starts per tick). Before
+every new TranscriptFetch start the worker calls the provider's FREE
+`GET /api/v2/me` balance endpoint. On zero balance it pauses without
+claiming/dropping sources; if balance *actually* increases later it
+automatically resumes. HTTP 402 and 429 do not consume finite source
+failure attempts. GitHub Actions' best-effort scheduling can be delayed,
+and backlog catch-up may span multiple days. Do not confuse a per-tick
+timeout bound with an arbitrary daily input limit.
+
+**Important credit reality:** a starter pack of 50 free credits is not a
+guarantee of free processing forever. The provider's current web pages
+disagree about free-credit renewal, so do not assume that a balance
+returns every month. This system resumes on observed credit replenishment,
+not an invented date; if the credits never refill, the backlog remains
+safely paused until the account is funded or another proven free
+acquisition route exists. No subscription or overage was purchased by
+this project.
+
+**Cloudflare vision:** the user's existing
+`REELBRAIN_CLOUDFLARE_VISION_ENABLED=1` together with
+`CLOUDFLARE_AI_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` activates the
+image-only Qwen 3.8 adapter **without** requiring generic Groq/Gemini
+model-upload permission. Images still require real video/frame access.
+No frontend or See More Details deployment has occurred.
+
+**Production fixes:** PR #18 fixed PostgreSQL JSONB parameter typing
+after a first genuine provider result failed persistence. PR #19 added
+elastic credit-driven processing and applied the isolated migration
+`sql/0031_elastic_transcript_credit_backlog.sql`; PR #20 fixed the
+provider-specific Cloudflare vision opt-in. CI passed for each.
+This is the CURRENT implementation; older historical phase notes below
+describe earlier snapshots and must not be mistaken for current state.
+
+
 ## 2026-11-24 — Cloudflare token confirmed; URL-first ASR and hosted vision adapters
 
 **Cloudflare**: The dedicated `reelbrain-resilience-clock` Worker now has a
