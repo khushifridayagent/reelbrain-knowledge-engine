@@ -7,6 +7,20 @@ from threading import Semaphore, local
 from contextlib import contextmanager
 import time
 
+# Legacy rows from older workers may be stranded in terminal states after
+# provider outages. Never re-open processed jobs or arbitrary software bugs.
+RECOVERABLE_TERMINAL_SQL = """(status='partial' OR
+    (status='dead_letter' AND
+     (lower(coalesce(last_error,'')) LIKE 'metamediaunavailable: public media unavailable:%'
+      OR lower(coalesce(last_error,'')) LIKE 'publicbundleerror: public media unavailable:%'
+      OR lower(coalesce(last_error,'')) LIKE 'publicmediaerror: public media unavailable:%')
+     AND (lower(coalesce(last_error,'')) LIKE '%token_expired_or_invalid%'
+      OR lower(coalesce(last_error,'')) LIKE '%rate_limited%'
+      OR lower(coalesce(last_error,'')) LIKE '%http_forbidden%'
+      OR lower(coalesce(last_error,'')) LIKE '%login_required%'
+      OR lower(coalesce(last_error,'')) LIKE '%credential_invalid%'
+      OR lower(coalesce(last_error,'')) LIKE '%credits_exhausted%')))"""
+
 _context=local()
 
 @contextmanager
