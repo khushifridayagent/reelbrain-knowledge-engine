@@ -52,9 +52,13 @@ original ScrapeCreators adapter. It:
   never overwritten. Pending full-media OCR/vision queue stays pending.
 - Attempts to recover stale claimed transactions and acknowledges errors.
   A shared maximum of **two new starts per UTC day** remains the default,
-  so it is a bounded proof-of-concept, **NOT** a solution for 50–60 Reels/day.
-  Increase only after selecting a sustainable paid plan with explicit
-  user approval and a meaningful spend/credit cap.
+  so it is a bounded proof-of-concept. With a provider plan/credits already
+  purchased and the explicit budget approval flag, set GitHub repository
+  variable `REELBRAIN_HOSTED_TRANSCRIPT_DAILY_LIMIT=60` (1–120 permitted).
+  This allows up to 60 separately queued sources/day with no auto-upgrade
+  or automatic paid subscription. **Provider credits charged are not
+  guaranteed equal to API starts** (long videos may cost more).
+  Set a hard provider-account spend cap independently.
 
 **Actual credentials required to enable a live call** (do not paste into chat):
 
