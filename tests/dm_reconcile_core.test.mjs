@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reelEventsFromGraph, inspectParticipantIds} from '../supabase/functions/reelbrain-dm-reconciler/core.mjs';
+import {reelEventsFromGraph, inspectParticipantIds, linkedPageId, graphErrorCategory, validGraphId} from '../supabase/functions/reelbrain-dm-reconciler/core.mjs';
 const sender='12345001',business='12345002';
 test('Graph Reel attachment becomes a safe canonical receipt',()=>{
  const input=[{id:'mid.REEL1',from:{id:sender},created_time:'2026-11-23T21:23:00+0000',message:'',attachments:{data:[{type:'ig_reel',payload:{url:'https://www.instagram.com/reel/DaQLc80PIBU/?igsh=abc'}}]}}];
@@ -25,4 +25,14 @@ test('Foreign sender and personal replies are rejected',()=>{
 test('Conversation participants must include both IDs',()=>{
  assert.ok(inspectParticipantIds({data:[{id:sender},{id:business}]},sender,business));
  assert.equal(inspectParticipantIds({data:[{id:sender},{id:'88888'}]},sender,business),false);
+});
+test('only the linked Facebook Page may be used for conversations',()=>{
+ assert.equal(linkedPageId({id:'12345003',instagram_business_account:{id:business}},business),'12345003');
+ assert.equal(linkedPageId({id:'12345003',instagram_business_account:{id:'999999'}},business),null);
+ assert.equal(linkedPageId({id:business},business),null);
+});
+test('Meta message IDs may contain dots and safe errors include numeric code only',()=>{
+ assert.equal(validGraphId('mid.REEL1'),true);
+ assert.equal(validGraphId('abc/def'),false);
+ assert.equal(graphErrorCategory(400,{error:{code:190,error_subcode:463,message:'private'}}),'graph_http_400_code_190_sub_463');
 });
