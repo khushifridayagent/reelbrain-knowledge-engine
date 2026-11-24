@@ -134,7 +134,7 @@ class ElasticTranscriptTests(unittest.TestCase):
             {'status':'transcript_saved','requests_sent':1},
             {'status':'provider_async_processing','requests_sent':1},
             {'status':'transcript_saved','requests_sent':1},
-            {'status':'no_eligible_source_or_daily_budget','requests_sent':0},
+            {'status':'queue_idle_or_legacy_daily_safety_cap','requests_sent':0},
         ]
         with patch('reelbrain.hosted_transcript_job.run_one_hosted_transcript',side_effect=responses) as fn:
             result=run_hosted_transcript_drain(max_jobs_per_tick=4,max_seconds=120)
