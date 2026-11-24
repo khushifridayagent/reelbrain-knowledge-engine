@@ -78,6 +78,7 @@ class MediaSummaryTests(unittest.TestCase):
         self.assertEqual(status,'evidence_saved')
         self.assertEqual(missing,[])
         self.assertEqual(summary['processing_stage'],'completed')
-        self.assertTrue(summary['audio_transcribed'])
+        self.assertFalse(summary['audio_transcribed'])
+        self.assertEqual(summary['content']['hosted_audio_reused'],'transcriptfetch')
 
 if __name__=='__main__':unittest.main()
