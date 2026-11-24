@@ -164,7 +164,7 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
       - name: Start private ephemeral open-source Cobalt
         id: cobalt
-        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' && vars.REELBRAIN_COBALT_ENABLED != '0' }}
+        if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         shell: bash
         run: |
           echo "ready=false" >> "$GITHUB_OUTPUT"
