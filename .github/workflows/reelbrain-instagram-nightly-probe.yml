@@ -1,0 +1,55 @@
+name: Reelbrain public Instagram nightly canary (one-time)
+on:
+  workflow_dispatch:
+  # Executed once when this exact workflow first merges to main. Future
+  # scheduled Reelbrain jobs are separate and remain untouched.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reelbrain-instagram-nightly-probe.yml'
+permissions:
+  contents: read
+concurrency:
+  group: reelbrain-nightly-public-canary
+  cancel-in-progress: false
+jobs:
+  probe-public-video:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install latest official yt-dlp pre-release without credentials
+        run: |
+          python -m pip install --disable-pip-version-check --pre --upgrade 'yt-dlp[default]'
+          python -m yt_dlp --version
+      - name: Verify real original media bytes from two public Reel URLs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from tempfile import TemporaryDirectory
+          from pathlib import Path
+          from reelbrain.public_media import acquire_public_reel, PublicMediaError
+          sources=('DgGHCjZIZtW','DaQLc80PIBU')
+          success=0
+          for shortcode in sources:
+              with TemporaryDirectory(prefix='rb_nightly_canary_') as root:
+                  try:
+                      video=acquire_public_reel(
+                        'https://www.instagram.com/reel/'+shortcode+'/',
+                        Path(root),max_bytes=60*1024*1024,timeout_seconds=125)
+                      header=video.read_bytes()[:12]
+                      assert header[4:8]==b'ftyp' and video.stat().st_size>1024
+                      print('SOURCE',shortcode,'actual_mp4=YES','bytes=',video.stat().st_size)
+                      success+=1
+                  except PublicMediaError as e:
+                      # Bounded known category only; no signed CDN URL or cookies.
+                      print('SOURCE',shortcode,'actual_mp4=NO','reason=',str(e)[:110])
+          print('REAL_VIDEO_SUCCESS',success,'of',len(sources))
+          if not success:
+              raise SystemExit('No actual Instagram video bytes accessible to anonymous nightly yt-dlp on this runner')
+          PY
