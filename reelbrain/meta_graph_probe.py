@@ -83,8 +83,12 @@ def check_meta_business_access(
         if not isinstance(entry,dict):continue
         u=entry.get('permalink')
         if not isinstance(u,str):continue
-        u=u.split('?',1)[0].rstrip('/')
-        if u.endswith('/'+shortcode) and '/instagram.com/' in u:
+        try:
+            from .sources import canonicalize_instagram
+            observed=canonicalize_instagram(u)
+        except (TypeError,ValueError):
+            continue
+        if observed.rstrip('/').rsplit('/',1)[-1]==shortcode:
             matches.append(entry)
     if len(matches)!=1:
         return {'status':'source_not_in_business_discovery',
