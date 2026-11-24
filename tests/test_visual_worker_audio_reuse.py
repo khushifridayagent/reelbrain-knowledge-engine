@@ -37,4 +37,30 @@ class StoredSpeechTests(unittest.TestCase):
         self.assertEqual(result['content']['hosted_audio_reused'],'transcriptfetch')
         self.assertTrue(result['ocr_analyzed'])
 
+
+    def test_production_visual_engine_does_not_retranscribe_existing_speech(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from reelbrain.public_bundle import PublicBundle
+        from reelbrain.durable_worker import process_url
+        with TemporaryDirectory() as d:
+            path=Path(d)/'fixture.mp4'
+            path.write_bytes(b'fixture')
+            for row,expect_reuse in [((VALID,),True),(None,False)]:
+                with self.subTest(reuse=expect_reuse), patch.dict('os.environ',{'REELBRAIN_ENABLE_LOCAL_ASR':'1'},clear=True):
+                    with patch('reelbrain.scrapecreators_media.acquire_with_public_provider',return_value=PublicBundle((path,),'fixture')), \
+                         patch('reelbrain.durable_worker.LocalPipelineEngine') as engine, \
+                         patch('reelbrain.local_asr.FasterWhisperSpeechToText') as local_asr, \
+                         patch('reelbrain.durable_worker.save_reel_to_postgres',return_value={'persisted_in_postgres':True}) as writer:
+                        engine.return_value.ingest.return_value={'processing_receipt_id':'fixture','status':'partial'}
+                        result=process_url(URL,DB(row),apify_token='',acquisition='yt_dlp_public')
+                        self.assertTrue(result['persisted_in_postgres'])
+                        if expect_reuse:
+                            local_asr.assert_not_called()
+                            self.assertIsNone(engine.call_args.kwargs['audio_model'])
+                            self.assertEqual(writer.call_args.args[-1]['hosted_audio_reused'],'transcriptfetch')
+                        else:
+                            local_asr.assert_called_once()
+                            self.assertIs(engine.call_args.kwargs['audio_model'],local_asr.return_value)
+
 if __name__=='__main__':unittest.main()
