@@ -69,33 +69,33 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
         try:
             def engine_factory(store):
                 asr=None;vlm=None
-                if flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'):
-                    if os.getenv('GROQ_API_KEY'):
-                        asr=GroqSpeechToText(ProviderOptions(
-                            os.environ['GROQ_API_KEY'],
-                            os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
-                            'https://api.groq.com'))
-                    # Prefer the ready-hosted Cloudflare vision model when
-                    # explicitly configured; never auto-spend external credits.
-                    from .cloudflare_vision_config import cloudflare_qwen_config
-                    cloudflare_vision=cloudflare_qwen_config()
-                    if cloudflare_vision:
-                        from .qwen_vl import QwenVLResearcher
-                        vlm=QwenVLResearcher(
-                            cloudflare_vision['base_url'],
-                            model=cloudflare_vision['model'],
-                            api_key=cloudflare_vision['api_key'],
-                            max_frames=8)
-                    elif os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
-                        from .qwen_vl import QwenVLResearcher
-                        vlm=QwenVLResearcher(
-                            os.environ['REELBRAIN_QWEN_VL_BASE_URL'],
-                            model=os.getenv('REELBRAIN_QWEN_VL_MODEL','Qwen/Qwen3-VL-8B-Instruct'),
-                            api_key=os.getenv('REELBRAIN_QWEN_VL_API_KEY',''))
-                    elif os.getenv('GEMINI_API_KEY'):
-                        vlm=GeminiVideoResearcher(
-                            os.environ['GEMINI_API_KEY'],
-                            os.getenv('GEMINI_VIDEO_MODEL',''))
+                generic_external_allowed=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
+                from .cloudflare_vision_config import cloudflare_qwen_config
+                cf_vision=cloudflare_qwen_config()
+                # Provider-specific Cloudflare vision opt-in must NOT silently
+                # activate unrelated Groq paid ASR or Gemini model uploads.
+                if generic_external_allowed and os.getenv('GROQ_API_KEY'):
+                    asr=GroqSpeechToText(ProviderOptions(
+                        os.environ['GROQ_API_KEY'],
+                        os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
+                        'https://api.groq.com'))
+                if cf_vision:
+                    from .qwen_vl import QwenVLResearcher
+                    vlm=QwenVLResearcher(
+                        cf_vision['base_url'],
+                        model=cf_vision['model'],
+                        api_key=cf_vision['api_key'],
+                        max_frames=8)
+                elif generic_external_allowed and os.getenv('REELBRAIN_QWEN_VL_BASE_URL'):
+                    from .qwen_vl import QwenVLResearcher
+                    vlm=QwenVLResearcher(
+                        os.environ['REELBRAIN_QWEN_VL_BASE_URL'],
+                        model=os.getenv('REELBRAIN_QWEN_VL_MODEL','Qwen/Qwen3-VL-8B-Instruct'),
+                        api_key=os.getenv('REELBRAIN_QWEN_VL_API_KEY',''))
+                elif generic_external_allowed and os.getenv('GEMINI_API_KEY'):
+                    vlm=GeminiVideoResearcher(
+                        os.environ['GEMINI_API_KEY'],
+                        os.getenv('GEMINI_VIDEO_MODEL',''))
                 if asr is None and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
                     # Local Whisper executes fully on CPU, without any API upload.
                     from .local_asr import FasterWhisperSpeechToText
@@ -111,7 +111,8 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify')->di
                     bundle=acquire_public_bundle(source_url,Path(d),cookies_file=cookies)
                 result=engine_factory(db).ingest(
                     list(bundle.paths),source_url,
-                    allow_external=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'))
+                    allow_external=(flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
+                                    or flag('REELBRAIN_CLOUDFLARE_VISION_ENABLED')))
                 result={**result,'media_processed':bool(result.get('processing_receipt_id')),
                         'provider':bundle.provider,'media_deleted_after_processing':True}
             elif acquisition=='apify':
