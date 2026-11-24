@@ -1,0 +1,81 @@
+name: Reelbrain isolated Cobalt public-media canary
+on:
+  push:
+    branches: ['test/cobalt-public-media-canary']
+    paths: ['.github/workflows/cobalt-public-canary.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-media-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Start pinned upstream Cobalt on localhost (no secrets)
+        run: |
+          docker run --rm -d --name reelbrain-cobalt-canary \
+            --cap-drop ALL --security-opt no-new-privileges --memory 1g \
+            -p 127.0.0.1:9000:9000 -e API_URL=http://127.0.0.1:9000/ \
+            ghcr.io/imputnet/cobalt:11.7.1-a636575@sha256:df14a3b3fe4390d4e1c2d4761ed58981d34aa5fc82d0df2091bab890e7dfaa8b
+          for i in $(seq 1 25); do
+            if curl -fsS --max-time 2 http://127.0.0.1:9000/ >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Request one already queued public Reel and verify a real video stream
+        run: |
+          python - <<'PY'
+          import json, urllib.request, urllib.error, urllib.parse, tempfile, subprocess, pathlib, re
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          opener=urllib.request.build_opener(NoRedirect(),urllib.request.ProxyHandler({}))
+          request=urllib.request.Request('http://127.0.0.1:9000/',
+              data=json.dumps({'url':'https://www.instagram.com/reel/DgGHCjZIZtW/',
+                              'downloadMode':'auto','videoQuality':'1080'}).encode(),
+              headers={'Content-Type':'application/json','Accept':'application/json'})
+          try:
+              with opener.open(request,timeout=50) as r: data=json.load(r)
+          except urllib.error.HTTPError as e:
+              try: data=json.load(e)
+              except Exception: raise SystemExit('Cobalt HTTP error '+str(e.code))
+          status=data.get('status')
+          if status not in ('redirect','tunnel'):
+              reason=(data.get('error') or {}).get('code','other')
+              print('COBALT_CANARY', status if status in ('error','picker','local-processing') else 'unknown',
+                    reason if isinstance(reason,str) and re.fullmatch(r'[a-zA-Z0-9._-]{1,100}',reason) else 'unknown')
+              raise SystemExit('No direct video stream returned')
+          url=data.get('url','')
+          p=urllib.parse.urlsplit(url)
+          host=p.hostname or ''
+          safe_local=(status=='tunnel' and p.scheme=='http' and host=='127.0.0.1' and p.port==9000 and p.path=='/tunnel')
+          safe_cdn=(status=='redirect' and p.scheme=='https' and p.port in (None,443) and
+                    (host=='cdninstagram.com' or host.endswith('.cdninstagram.com') or
+                     host=='fbcdn.net' or host.endswith('.fbcdn.net')))
+          if not (safe_local or safe_cdn) or p.username or p.password or p.fragment:
+              raise SystemExit('Unapproved media endpoint')
+          with tempfile.TemporaryDirectory() as td:
+              target=pathlib.Path(td)/'sample.mp4'
+              total=0
+              try:
+                  with opener.open(url,timeout=45) as r,target.open('wb') as f:
+                      while True:
+                          chunk=r.read(1024*1024)
+                          if not chunk:break
+                          total+=len(chunk)
+                          if total>100*1024*1024:raise ValueError('size')
+                          f.write(chunk)
+              except Exception as e:raise SystemExit('COBALT_CANARY stream_failed '+type(e).__name__)
+              probe=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries',
+                 'stream=width,height:format=duration','-of','json',str(target)],capture_output=True,text=True,timeout=20)
+              if probe.returncode:raise SystemExit('COBALT_CANARY not_decodable_video')
+              info=json.loads(probe.stdout)
+              if not info.get('streams') or float(info.get('format',{}).get('duration',0))<=0:
+                  raise SystemExit('COBALT_CANARY missing_motion_stream')
+              decode=subprocess.run(['ffmpeg','-v','error','-i',str(target),'-frames:v','2','-f','null','-'],
+                 capture_output=True,timeout=20)
+              if decode.returncode:raise SystemExit('COBALT_CANARY decode_failed')
+              print('COBALT_CANARY verified_video_bytes',total,'duration',info['format']['duration'])
+          PY
+      - name: Remove isolated container
+        if: always()
+        run: docker rm -f reelbrain-cobalt-canary >/dev/null 2>&1 || true
