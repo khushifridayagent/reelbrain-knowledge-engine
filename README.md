@@ -1,5 +1,23 @@
 # Reelbrain Knowledge Engine
 
+### 2026-11-24 verified visual-access status (read this first)
+
+**Real tests:** Cloudflare-hosted Qwen image reasoning worked on a
+synthetic workflow diagram and identified the login modal/thumbnail
+on real Instagram public/embed pages. Two *actual queued Reels* still
+failed full MP4 acquisition with the most recent official yt-dlp nightly
+on GitHub Actions (0/2). **6/6 have hosted speech transcripts, 0/6 have
+original video frames, screen OCR or QR evidence.** Neither Qwen nor
+a static Instagram poster is proof of video understanding.
+
+[**Exact evidence, production code fixes, and the one-time optional
+official Meta Business Discovery setup**](docs/INSTAGRAM_VISUAL_UNBLOCK_VERIFIED_2026_11.md).
+A read-only Meta Graph professional-creator source-media fallback is now
+implemented, tested and **OFF until the owner's own appropriately scoped
+Graph token and professional IG user ID are configured**; no provider
+purchase or frontend deployment has been made.
+
+
 ## Priority: on-screen Reel knowledge, screenshots, QR links, carousel pages (24 Nov 2026)
 
 **This is the highest-priority missing output.** Saving spoken audio is NOT
