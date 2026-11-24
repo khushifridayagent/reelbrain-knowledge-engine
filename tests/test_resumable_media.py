@@ -109,3 +109,27 @@ class ResumableMediaTests(unittest.TestCase):
     def test_partial_without_error_is_not_a_success(self):
         from reelbrain.resumable_media import retry_seconds
         self.assertEqual(retry_seconds({'video_model':'required modality not attempted'}),3600)
+
+    def test_recover_only_legacy_partial_and_known_access_dead_letters(self):
+        import sqlite3
+        from reelbrain.resumable_media import RECOVERABLE_TERMINAL_SQL
+        with sqlite3.connect(':memory:') as con:
+            con.execute('create table jobs(id integer, status text, last_error text)')
+            con.executemany('insert into jobs values(?,?,?)',[
+                (1,'partial',None),
+                (2,'dead_letter','MetaMediaUnavailable: Public media unavailable: Meta Graph token_expired_or_invalid'),
+                (3,'dead_letter','PublicBundleError: Public media unavailable: gallery_rate_limited'),
+                (4,'dead_letter','TypeError: media worker stage incomplete'),
+                (5,'processed',None),
+                (6,'leased',None),
+                (7,'queued',None),
+                (8,'dead_letter','RuntimeError: token_expired_or_invalid')])
+            ids=con.execute('select id from jobs where '+RECOVERABLE_TERMINAL_SQL+' order by id').fetchall()
+            self.assertEqual(ids,[(1,),(2,),(3,)])
+
+    def test_legacy_recovery_is_reachable_when_no_normal_queued_jobs(self):
+        path=Path(__file__).resolve().parents[1]/'.github/workflows/reelbrain-media-batch.yml'
+        self.assertIn('RECOVERABLE_TERMINAL_SQL',path.read_text())
+        from reelbrain import durable_worker
+        import inspect
+        self.assertIn('RECOVERABLE_TERMINAL_SQL',inspect.getsource(durable_worker.run_one_batch))
