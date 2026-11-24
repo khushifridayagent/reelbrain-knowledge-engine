@@ -1,5 +1,74 @@
 # Reelbrain Knowledge Engine
 
+## Priority: on-screen Reel knowledge, screenshots, QR links, carousel pages (24 Nov 2026)
+
+**This is the highest-priority missing output.** Saving spoken audio is NOT
+equivalent to understanding the video. Store literal onscreen text/commands,
+decoded QR payloads, exact page/timestamp source links, workflow arrows,
+configuration steps, inputs/outputs, underlying business logic, and English
+knowledge explanations. A song or instrumental background is not knowledge;
+do not infer visually shown details from a speech transcript or caption.
+
+**Now implemented and synthetic-CI-tested (PRs #27–#30):**
+- `reelbrain/qr_evidence.py`: deterministic offline QR decoder for real photo
+  pixels and video frames (5Hz, bounded), with exact timestamps and URL
+  candidates. It is independent of VLM hallucinations; no commenting or
+  creator DM is necessary if a QR is actually visible in the media.
+- `reelbrain/media.py` and `reelbrain/engine.py`: per-image Tesseract
+  + QR on a **1–20 page** carousel, preserved `slide:01..20` evidence
+  locators, real video 10Hz adaptive OCR + 5Hz QR, original source evidence
+  stored apart from inference.
+- `reelbrain/qwen_vl.py`: Cloudflare-hosted Qwen vision now inspects
+  scene-aware sampled video frames in up to 4 batches of 8, not just
+  8 uniformly selected frames total. Every visual explanation includes
+  selected sample timestamps. It interprets diagram arrows, workflows,
+  code/screenshots, tools, settings, prerequisites, and teaching steps.
+- Quota on page #N **must not discard earlier page descriptions**; partial
+  model successes and local OCR/QR persist and queue retries remain possible.
+  If a video has more distinct scenes than the sampling budget, status
+  stays **partial**; do not falsely mark complete visual coverage.
+- Private `reelbrain_research.search_reels` now indexes **every stored
+  on-screen OCR, decoded QR, first-party ASR and AI visual-model explanation**
+  directly with its actual `slide:NN` or `MM:SS` locator.
+  Distinct verification levels include `onscreen_qr_source`,
+  `onscreen_ocr_source` and `visual_model_inference`.
+- Screenshot-based tests and the 20-page QR fixture passed isolated CI.
+  NO private image/video content is stored in the public GitHub repository.
+
+**Actual live verification (dedicated Supabase project
+`xlkdzrhzizuftbnitodr`):** 6/6 original Reels currently have real
+third-party **spoken** transcripts, but **0/6 have true acquired frames,
+screen OCR or decoded QR**. All six original first-party media jobs remain
+in the queue; no fake visual description was inserted. Public Instagram
+access through anonymous GitHub-hosted downloads is the blocker.
+Cloudflare Qwen **cannot open arbitrary Instagram Reel pages by itself**:
+the model requires actual images/decoded frames. A verified accessible
+source-media bridge or authorized externally accessible media is still
+required before the visual engine can run on these six Reels.
+
+**Do not confuse two different Qwen lines:** self-hostable `Qwen3-VL`
+supports video OCR and temporal understanding, while the connected
+Cloudflare model `@cf/qwen/qwen3.8-27b` is a hosted **image+text** vision
+model. The Cloudflare API currently receives sampled frames, not a raw
+Reel permalink. Neither generative model replaces exact deterministic QR
+decoding or high-recall OCR. They complement each other.
+
+**Cost correction:** The often-repeated **~40–45 neurons** figure applies
+to Cloudflare **Whisper audio model usage per audio minute** (Whisper Large
+V3 Turbo: **46.63 neurons per audio minute**), NOT a fixed Qwen whole-video
+price. Qwen3.8 bills per text/image input tokens and generated output tokens;
+scene and image size affect consumption. Workers AI Free shares **10,000
+neurons/day**, reset at **00:00 UTC**, across ALL models. Quota exhaustion
+must preserve backlog; it is not a promise of unlimited free full-video
+inference or a two-to-six-month no-intervention SLA.
+
+Original references:
+- https://github.com/QwenLM/Qwen3-VL
+- https://developers.cloudflare.com/workers-ai/models/qwen3.8-27b/
+- https://developers.cloudflare.com/workers-ai/platform/pricing/
+- https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/
+
+
 ## LIVE VERIFIED — 24 Nov 2026, 16:40 IST
 
 **Cloudflare→GitHub workflow_dispatch:** ✅ verified, no new PAT needed.
