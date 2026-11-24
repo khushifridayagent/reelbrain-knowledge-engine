@@ -14,11 +14,20 @@ class CloudflareQwenTests(unittest.TestCase):
         },clear=True):
             self.assertIsNone(cloudflare_qwen_config())
 
-    def test_requires_explicit_external_upload_approval(self):
+    def test_explicit_vision_flag_authorizes_only_cloudflare_visual_upload(self):
+        # The owner configured the Cloudflare vision flag and API token.
+        # They MUST NOT also enable generic Groq/Gemini external uploads.
         with patch.dict('os.environ',{
             'REELBRAIN_CLOUDFLARE_VISION_ENABLED':'1',
             'REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED':'0',
             'CLOUDFLARE_AI_API_TOKEN':'fixture',
+            'CLOUDFLARE_ACCOUNT_ID':'0123456789abcdef0123456789abcdef'
+        },clear=True):
+            self.assertEqual(cloudflare_qwen_config()['model'],'@cf/qwen/qwen3.8-27b')
+
+    def test_no_cloudflare_api_key_remains_disabled(self):
+        with patch.dict('os.environ',{
+            'REELBRAIN_CLOUDFLARE_VISION_ENABLED':'1',
             'CLOUDFLARE_ACCOUNT_ID':'0123456789abcdef0123456789abcdef'
         },clear=True):
             self.assertIsNone(cloudflare_qwen_config())
