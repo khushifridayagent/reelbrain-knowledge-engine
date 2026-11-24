@@ -59,3 +59,33 @@ export function graphErrorCategory(status,payload){
    +(Number.isInteger(code)?'_code_'+code:'')
    +(Number.isInteger(sub)?'_sub_'+sub:'');
 }
+
+const safeGraphFailure=e=>{
+ const msg=String(e?.message||'');
+ return /^graph_http_\d+(?:_code_\d+)?(?:_sub_\d+)?$/.test(msg)?msg:'graph_network_unavailable';
+};
+const unsupportedField=e=>/^graph_http_400_code_100(?:_sub_\d+)?$/.test(safeGraphFailure(e));
+/** Resolve the linked Page without ever persisting or returning tokens to callers of the Edge Function. */
+export async function resolvePageSession(graph,credential,professional){
+ let identity;
+ try{identity=await graph('me',{fields:'id,instagram_business_account{id}'},credential);}
+ catch(e){if(!unsupportedField(e))throw new Error('identity_page_'+safeGraphFailure(e));}
+ const page=linkedPageId(identity,professional);
+ if(page)return {id:page,token:credential,mode:'direct_page'};
+ if(identity?.instagram_business_account?.id)throw new Error('meta_token_not_linked_page');
+ let accounts;
+ try{accounts=await graph('me/accounts',{fields:'id,instagram_business_account{id},access_token',limit:'100'},credential);}
+ catch(e){throw new Error('identity_accounts_'+safeGraphFailure(e));}
+ const matches=(Array.isArray(accounts?.data)?accounts.data:[]).filter(row=>linkedPageId(row,professional)&&typeof row.access_token==='string'&&row.access_token.length>0);
+ if(matches.length!==1)throw new Error('meta_token_not_linked_page');
+ return {id:linkedPageId(matches[0],professional),token:matches[0].access_token,mode:'derived_page'};
+}
+export async function listApprovedConversations(graph,session,sender){
+ const path=encodeURIComponent(session.id)+'/conversations';
+ let response;
+ try{response=await graph(path,{platform:'instagram',user_id:sender,limit:'5'},session.token);}
+ catch(e){if(!unsupportedField(e))throw new Error('conversation_list_'+safeGraphFailure(e));}
+ if(Array.isArray(response?.data)&&response.data.length)return response;
+ try{return await graph(path,{platform:'instagram',limit:'15'},session.token);}
+ catch(e){throw new Error('conversation_list_'+safeGraphFailure(e));}
+}
