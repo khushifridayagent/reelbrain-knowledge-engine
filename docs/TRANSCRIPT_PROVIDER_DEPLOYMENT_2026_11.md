@@ -98,6 +98,29 @@ OpenAI-compatible visual adapter; a Cloudflare API token/model endpoint must
 be configured and **tested against real media** before calling it active.
 The user has not yet provided those inference credentials.
 
+### GitHub configuration for Cloudflare Qwen 3.8 image understanding
+
+For existing local FFmpeg-extracted visual frames, the code now supports
+Cloudflare's official OpenAI-compatible endpoint with the established
+`reelbrain/qwen_vl.py` adapter:
+`https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1`.
+
+GitHub repository secret: `CLOUDFLARE_AI_API_TOKEN` — create a restricted
+Cloudflare Workers AI API token in the owner's Cloudflare dashboard.
+
+GitHub repository variables:
+- `CLOUDFLARE_ACCOUNT_ID` — 32-character Cloudflare account ID.
+- `REELBRAIN_CLOUDFLARE_VISION_ENABLED=1`
+- `REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED=1`
+
+The worker chooses `@cf/qwen/qwen3.8-27b` when these are all configured.
+This is a hosted multimodal **image** model, not a video-permalink retriever.
+It samples up to eight frames from actually downloaded assets. Default OFF;
+there is no guaranteed free-neuron headroom for 50–60 visual-heavy sources.
+Read daily Workers AI usage before enabling and limit call frequency.
+Official source:
+https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/
+
 The deep research report from TinyFish is useful as a source of candidate
 providers, but its suggested paths `src/processors/visual_inference.py`
 and `.github/workflows/media-batch.yml` do NOT match the actual code.
