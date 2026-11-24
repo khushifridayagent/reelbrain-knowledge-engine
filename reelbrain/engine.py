@@ -113,7 +113,7 @@ class LocalPipelineEngine:
             return observations
         visual_coverage_gaps=[]
         def video_understanding():
-            from .qwen_vl import QwenPartialVisualError
+            from .qwen_vl import QwenPartialVisualError,QwenVLResearcher
             observations=[]
             for idx,asset in enumerate(media_assets,1):
                 # Every static carousel slide gets its own visual pass; no
@@ -127,7 +127,10 @@ class LocalPipelineEngine:
                             ev.text,kind='model_inference',
                             locator=locator,confidence=ev.confidence))
                 try:
-                    add_results(self.video_model.analyze(asset))
+                    if checkpoint is not None and isinstance(self.video_model,QwenVLResearcher):
+                        add_results(self.video_model.analyze(asset,checkpoint=checkpoint,asset_index=idx))
+                    else:
+                        add_results(self.video_model.analyze(asset))
                     stats=getattr(self.video_model,'sampling_stats',None)
                     if isinstance(stats,dict) and stats.get('partial_scan'):
                         visual_coverage_gaps.append(
