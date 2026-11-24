@@ -44,9 +44,9 @@ class QRProofTests(unittest.TestCase):
                 'slide:03' in ev.locator for ev in output),output)
 
     def test_multiple_20_page_carousel_coverage_is_preserved(self):
-        if not shutil.which('tesseract'):self.skipTest('tesseract unavailable')
         from reelbrain.engine import LocalPipelineEngine
         from reelbrain.store import KnowledgeStore
+        from reelbrain.qr_evidence import read_qr_image
         with tempfile.TemporaryDirectory() as td:
             base=Path(td)
             files=[]
@@ -58,7 +58,8 @@ class QRProofTests(unittest.TestCase):
             store=KnowledgeStore(base/'evidence.sqlite')
             try:
                 # Tests exactly 20 pages with no generative provider calls.
-                result=LocalPipelineEngine(store).ingest(
+                result=LocalPipelineEngine(
+                    store,ocr=lambda p:read_qr_image(p,'image:qr')).ingest(
                     files,'https://www.instagram.com/p/DgGHCjZIZtW/')
                 self.assertEqual(result['asset_count'],20)
                 self.assertGreaterEqual(result['stage_observations'].get('ocr',0),20)
