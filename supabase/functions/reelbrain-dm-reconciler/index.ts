@@ -3,7 +3,7 @@
  * sender conversations; persists no raw private message texts or access tokens.
  * Can still report needs_review if Graph omits Reel attachments.
  */
-import { inspectParticipantIds, reelEventsFromGraph, linkedPageId, graphErrorCategory, validGraphId } from './core.mjs';
+import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations, buildReceiptRecheck } from './core.mjs';
 const env=(k:string)=>Deno.env.get(k)?.trim()||'';
 const base=env('SUPABASE_URL').replace(/\/$/,'');
 const role=env('SUPABASE_SERVICE_ROLE_KEY');
@@ -18,10 +18,10 @@ async function db(path:string,options:RequestInit={}){
  if(!r.ok)throw new Error('db_http_'+r.status);
  return await r.json().catch(()=>null);
 }
-async function graph(path:string,params:Record<string,string>={},ms=7000):Promise<any>{
+async function graph(path:string,params:Record<string,string>={},credential=token,ms=7000):Promise<any>{
  const url=new URL('https://graph.facebook.com/v26.0/'+path);
  for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
- const r=await fetch(url,{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(ms)});
+ const r=await fetch(url,{headers:{Authorization:'Bearer '+credential},redirect:'error',signal:AbortSignal.timeout(ms)});
  const result=await r.json().catch(()=>null);
  if(!r.ok || !result || typeof result!=='object' || result.error)throw new Error(graphErrorCategory(r.status,result));
  return result;
@@ -53,36 +53,34 @@ Deno.serve(async req=>{
    const sender=String(user.sender_id||'');if(!/^[0-9]{3,32}$/.test(sender)||sender===professional)continue;
    let checked=0,newSaved=0,unavailable=false,reason:string|null=null;
    try{
-     const history=await db('reelbrain_dm_receipts?select=message_id&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
-     const already=new Set((Array.isArray(history)?history:[]).map((x:any)=>String(x.message_id||'')));
-     const identity=await graph('me',{fields:'id,instagram_business_account{id}'});
-     const page=linkedPageId(identity,professional);
-     if(!page)throw new Error('meta_token_not_linked_page');
-     let conv=await graph(encodeURIComponent(page)+'/conversations',{platform:'instagram',user_id:sender,limit:'5'});
-     let threads=Array.isArray(conv.data)?conv.data.slice(0,5):[];
-     if(!threads.length){conv=await graph(encodeURIComponent(page)+'/conversations',{platform:'instagram',limit:'15'});threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];}
+     const history=await db('reelbrain_dm_receipts?select=message_id,status&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
+     const recheck=buildReceiptRecheck(history,2);
+     const session=await resolvePageSession(graph,token,professional);
+     const conv=await listApprovedConversations(graph,session,sender);
+     const threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];
+     console.info('reelbrain_dm_auth_mode',session.mode);
      const events:any[]=[];
      for(const thread of threads){
        if(!ident(String(thread.id||'')) || events.length>=8)continue;
        const tid=encodeURIComponent(thread.id);
-       const details=await graph(tid,{fields:'participants,updated_time'}).catch(()=>null);
+       const details=await graph(tid,{fields:'participants,updated_time'},session.token).catch(()=>null);
        if(!details){unavailable=true;reason='graph_conversation_detail_unavailable';continue;}
        if(!Array.isArray(details.participants?.data) || details.participants.data.length!==2 ||
            !inspectParticipantIds(details.participants,sender,professional))continue;
        if(!datesAreRecent(details.updated_time))continue;
-       const listing=await graph(tid+'/messages',{limit:'20'}).catch(()=>null);
+       const listing=await graph(tid+'/messages',{limit:'20'},session.token).catch(()=>null);
        if(!listing){unavailable=true;reason='graph_message_listing_unavailable';continue;}
        const items=Array.isArray(listing?.data)?listing.data:[];
        for(const item of items){
          if(events.length>=8)break;
-         const mid=String(item?.id||'');if(!ident(mid) || already.has(mid))continue;
-         if(!datesAreRecent(item?.created_time))continue;
-         let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'}).catch(()=>null);
-         if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'}).catch(()=>null);}
+         const mid=String(item?.id||'');if(!ident(mid)||!datesAreRecent(item?.created_time)||!recheck.take(mid))continue;
+         let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'},session.token).catch(()=>null);
+         if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'},session.token).catch(()=>null);}
          if(!detail) {unavailable=true;reason='graph_message_detail_unavailable';continue;}
          if(!datesAreRecent(detail.created_time)||String(detail.from?.id)!==sender)continue;
          // No private message string persists; only canonical URL, attachment type, Meta mid.
-         events.push(...reelEventsFromGraph([detail],sender,professional));
+         const extracted=reelEventsFromGraph([detail],sender,professional);
+         events.push(...(recheck.isReview(mid)?extracted.filter((e:any)=>e.status==='queued'):extracted));
          checked++;
        }
      }
@@ -93,7 +91,7 @@ Deno.serve(async req=>{
        linkedReels+=result?.reel_links_seen||0;
        newSaved=result?.new_receipts||0;
      }
-   }catch(e){unavailable=true;const msg=String((e as Error).message);reason=/^(graph_http_\d+(?:_code_\d+)?(?:_sub_\d+)?|meta_token_not_linked_page|db_http_\d+)$/.test(msg)?msg:'graph_or_network_unavailable';console.error('reelbrain_reconcile_sender_failed',reason);}
+   }catch(e){unavailable=true;const msg=String((e as Error).message);reason=/^((?:(?:identity_page|identity_accounts|conversation_list)_)?graph_http_\d+(?:_code_\d+)?(?:_sub_\d+)?|(?:identity_page|identity_accounts|conversation_list)_graph_network_unavailable|meta_token_not_linked_page|db_http_\d+)$/.test(msg)?msg:'graph_or_network_unavailable';console.error('reelbrain_reconcile_sender_failed',reason);}
    if(unavailable)errors++;
    examined+=checked;
    try{
