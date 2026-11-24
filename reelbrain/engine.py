@@ -66,9 +66,21 @@ class LocalPipelineEngine:
             raise ValueError('local media bundle over 350MB budget')
         media=media_assets[0]
         source=canonicalize_instagram(source_url)
-        external_count=int(self.audio_model is not None)+int(self.video_model is not None)+int(self.fact_model is not None)
+        # Local CPU Whisper is genuinely offline. Only adapters that could
+        # transfer audio/video to another host need an external-upload opt-in.
+        # Treat adapters without an explicit marker as remote by default.
+        video_present=any(p.suffix.lower() in {'.mp4','.mov','.mkv','.webm','.avi'}
+                          for p in media_assets)
+        adapters=(
+            (self.audio_model,video_present),
+            (self.video_model,True),
+            (self.fact_model,True),
+        )
+        external_count=sum(int(adapter is not None and active and
+                               getattr(adapter,'requires_external',True))
+                           for adapter,active in adapters)
         if external_count and not allow_external:
-            raise RemoteConsentRequired('audio/video uploads require explicit --allow-external')
+            raise RemoteConsentRequired('remote audio/video/model transfer requires explicit --allow-external')
         slide_failures=[]
         def read_all_pages():
             observations=[]

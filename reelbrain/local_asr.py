@@ -9,6 +9,7 @@ from .contracts import Observation
 
 
 class FasterWhisperSpeechToText:
+    requires_external = False  # CPU inference reads only locally extracted WAV bytes
     def __init__(self,model_size:str='small',*,model=None):
         if model_size not in {'tiny','base','small','medium'}:
             raise ValueError('Unsupported bounded local Whisper model')
