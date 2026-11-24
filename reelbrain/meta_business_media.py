@@ -75,16 +75,34 @@ class MetaBusinessDiscovery:
             'children.limit(20){id,media_type,media_url}}}'
         )
         import httpx
-        try:
-            http=self.http or httpx
-            response=http.get(self.GRAPH+'/'+self.own_id,params={'fields':fields},
-                 headers={'Authorization':'Bearer '+self.token,
-                          'Accept':'application/json'},
-                 timeout=24)
-            response.raise_for_status()
-            payload=response.json()
-        except Exception:
-            raise MetaMediaUnavailable('Public media unavailable: Meta Graph read failed') from None
+        http=self.http or httpx
+        headers={'Authorization':'Bearer '+self.token,'Accept':'application/json'}
+        def read_graph(path,parameters):
+            try:
+                response=http.get(self.GRAPH+path,params=parameters,
+                    headers=headers,timeout=24,follow_redirects=False)
+                payload=response.json()
+                if not isinstance(payload,dict):
+                    raise MetaMediaUnavailable('Public media unavailable: malformed Meta Graph reply')
+                return payload
+            except MetaMediaUnavailable:raise
+            except Exception:
+                # Raw URL, token and Graph error body must never enter logs.
+                raise MetaMediaUnavailable('Public media unavailable: Meta Graph read failed') from None
+        payload=read_graph('/'+self.own_id,{'fields':fields})
+        error=payload.get('error')
+        if isinstance(error,dict) and error.get('code')==100:
+            # Meta App ID / Facebook Page ID are not the numeric
+            # professional IG user ID. Resolve *only* a single linked IG
+            # through official /me/accounts; never guess among multiple Pages.
+            from .meta_graph_probe import choose_linked_professional_ig_id
+            pages=read_graph('/me/accounts',{
+                'fields':'id,instagram_business_account{id}','limit':25})
+            selected=choose_linked_professional_ig_id(pages,self.own_id)
+            if not selected:
+                raise MetaMediaUnavailable(
+                    'Public media unavailable: linked professional Instagram account missing or ambiguous')
+            payload=read_graph('/'+selected,{'fields':fields})
         if not isinstance(payload,dict) or 'error' in payload:
             raise MetaMediaUnavailable('Public media unavailable: Meta Graph permission/response failure')
         profile=payload.get('business_discovery') or {}

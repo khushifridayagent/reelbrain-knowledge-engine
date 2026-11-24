@@ -27,6 +27,29 @@ def classify_graph_failure(payload:dict)->str:
     return 'meta_graph_error'
 
 
+def choose_linked_professional_ig_id(pages:dict, configured_id:str)->str|None:
+    """Select only an unambiguous Page-linked IG professional ID.
+
+    A Meta App ID, Facebook Page ID and Instagram Professional ID are
+    DIFFERENT numeric values. Never guess among several linked accounts.
+    """
+    if not isinstance(pages,dict) or not isinstance(pages.get('data'),list):
+        return None
+    if (pages.get('paging') or {}).get('next'):
+        # Pagination not exhausted: cannot safely assume only one.
+        return None
+    found=set()
+    for page in pages['data'][:100]:
+        if not isinstance(page,dict):continue
+        account=page.get('instagram_business_account')
+        ident=account.get('id') if isinstance(account,dict) else None
+        if isinstance(ident,str) and _ID_RE.fullmatch(ident):
+            found.add(ident)
+    if configured_id in found:return configured_id
+    if len(found)==1:return next(iter(found))
+    return None
+
+
 def check_meta_business_access(
     token:str,own_ig_id:str,enabled:str,*,creator:str='aimortal.ig',
     shortcode:str='DgGHCjZIZtW',http=None
@@ -58,7 +81,27 @@ def check_meta_business_access(
     if not me.get('id'):return {'status':'invalid_graph_response'}
     # Step 2: caller's own (not the App ID or Page ID) professional IG node.
     account,error=request('/'+own_ig_id,{'fields':'id,username'})
-    if error:return {'status':error,'token_valid':True}
+    resolved_from_page=False
+    if error=='unsupported_graph_field_or_ig_id':
+        # The user may have pasted a Page ID or App ID by mistake.
+        # Recover ONLY if /me/accounts identifies exactly one linked IG.
+        pages,page_error=request('/me/accounts',{
+            'fields':'id,instagram_business_account{id}', 'limit':25
+        })
+        if page_error:
+            return {'status':'linked_page_access_denied' if
+                    page_error=='insufficient_graph_permissions' else page_error,
+                    'token_valid':True}
+        resolved=choose_linked_professional_ig_id(pages,own_ig_id)
+        if not resolved:
+            return {'status':'linked_professional_id_ambiguous_or_missing',
+                    'token_valid':True}
+        account,error=request('/'+resolved,{'fields':'id,username'})
+        if error:return {'status':error,'token_valid':True}
+        own_ig_id=resolved
+        resolved_from_page=True
+    elif error:
+        return {'status':error,'token_valid':True}
     if str(account.get('id',''))!=own_ig_id:
         return {'status':'incorrect_professional_ig_id','token_valid':True}
     # Step 3: one public-professional creator and one of the original six
@@ -69,13 +112,15 @@ def check_meta_business_access(
         'children.limit(20){media_type,media_url}}}'
     )
     data,error=request('/'+own_ig_id,{'fields':fields})
-    if error:return {'status':error,'token_valid':True,'account_id_valid':True}
+    if error:return {'status':error,'token_valid':True,'account_id_valid':True,
+                     'resolved_from_linked_page':resolved_from_page}
     discovery=data.get('business_discovery') or {}
     if not isinstance(discovery,dict) or (
         str(discovery.get('username','')).lower()!=creator.lower()
     ):
         return {'status':'business_discovery_unavailable',
-                'token_valid':True,'account_id_valid':True}
+                'token_valid':True,'account_id_valid':True,
+                'resolved_from_linked_page':resolved_from_page}
     entries=(discovery.get('media') or {}).get('data') or []
     if not isinstance(entries,list):entries=[]
     matches=[]
@@ -92,7 +137,9 @@ def check_meta_business_access(
             matches.append(entry)
     if len(matches)!=1:
         return {'status':'source_not_in_business_discovery',
-                'token_valid':True,'account_id_valid':True,'matched_media':len(matches),
+                'token_valid':True,'account_id_valid':True,
+                'resolved_from_linked_page':resolved_from_page,
+                'matched_media':len(matches),
                 'returned_media':len(entries)}
     record=matches[0]
     children=(record.get('children') or {}).get('data') if record.get('media_type')=='CAROUSEL_ALBUM' else [record]
@@ -103,5 +150,6 @@ def check_meta_business_access(
         'status':'original_media_url_available' if children and count==len(children)
                     else 'media_found_without_original_url',
         'token_valid':True,'account_id_valid':True,
+        'resolved_from_linked_page':resolved_from_page,
         'matched_media':len(matches),'original_urls':count,'slide_count':len(children)
     }
