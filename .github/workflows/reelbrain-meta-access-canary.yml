@@ -1,4 +1,4 @@
-name: Reelbrain Meta Graph access canary (identity recovery)
+name: Reelbrain Meta Graph access canary (permissions audit)
 on:
   workflow_dispatch:
   push:
@@ -35,7 +35,8 @@ jobs:
         run: |
           python - <<'PY'
           import os,json
-          from reelbrain.meta_graph_probe import check_meta_business_access
+          from reelbrain.meta_graph_probe import (
+              check_meta_business_access,inspect_graph_permissions)
           status=check_meta_business_access(
             os.environ.get('REELBRAIN_META_GRAPH_TOKEN',''),
             os.environ.get('REELBRAIN_META_IG_USER_ID',''),
@@ -44,6 +45,12 @@ jobs:
           # These are predefined categories/counts only. Never emit token,
           # IG user ID, Graph error message, raw API JSON or media URL.
           print('META_GRAPH_SAFE_DIAGNOSTIC',json.dumps(status,sort_keys=True))
+          if status.get('status')!='original_media_url_available':
+              # Exactly one additional READ to determine missing permissions.
+              # Only boolean scope flags appear in logs, never account/token.
+              scopes=inspect_graph_permissions(
+                  os.environ.get('REELBRAIN_META_GRAPH_TOKEN',''))
+              print('META_GRAPH_SCOPES',json.dumps(scopes,sort_keys=True))
           if status['status']=='original_media_url_available':
               print('Original media URL exists for test source: visual worker may proceed.')
           else:

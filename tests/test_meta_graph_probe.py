@@ -118,4 +118,34 @@ class GraphProbeTests(unittest.TestCase):
         self.assertEqual(r['status'],'linked_page_access_denied')
         self.assertTrue(r['token_valid'])
 
+    def test_report_linked_pages_counts_without_numeric_ids(self):
+        http=FakeHttp([
+          FakeResponse(200,{'id':'123'}),
+          FakeResponse(400,{'error':{'code':100}}),
+          FakeResponse(200,{'data':[{'id':'11223344'},
+               {'id':'55443322','instagram_business_account':{'id':'17841400001234567'}},
+               {'id':'55443323','instagram_business_account':{'id':'17841400007654321'}}]})
+        ])
+        r=check_meta_business_access('fixture','1234567890','1',http=http)
+        self.assertEqual(r['status'],'linked_professional_id_ambiguous_or_missing')
+        self.assertEqual(r['visible_facebook_pages'],3)
+        self.assertEqual(r['visible_professional_instagram_accounts'],2)
+        self.assertNotIn('17841400001234567',str(r))
+
+    def test_inspect_only_granted_scope_flags_without_returning_user_data(self):
+        from reelbrain.meta_graph_probe import inspect_graph_permissions
+        http=FakeHttp([FakeResponse(200,{'data':[
+           {'permission':'instagram_basic','status':'granted'},
+           {'permission':'instagram_manage_insights','status':'declined'},
+           {'permission':'pages_show_list','status':'granted'},
+           {'permission':'pages_read_engagement','status':'granted'},
+           {'permission':'email','status':'granted'}]})])
+        flags=inspect_graph_permissions('fixture',http=http)
+        self.assertTrue(flags['instagram_basic'])
+        self.assertFalse(flags['instagram_manage_insights'])
+        self.assertTrue(flags['pages_show_list'])
+        self.assertTrue(flags['pages_read_engagement'])
+        self.assertNotIn('email',flags)
+        self.assertNotIn('fixture',str(flags))
+
 if __name__=='__main__':unittest.main()
