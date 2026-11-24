@@ -47,9 +47,7 @@ def normalize_transcriptfetch(url:str,payload:dict)->dict|None:
     if data.get('source')!='audio':
         raise TranscriptFetchError('Returned text is not audio transcription')
     text=data.get('text')
-    if text is None or (isinstance(text,str) and not text.strip()):
-        return None
-    if not isinstance(text,str) or len(text)>90000:
+    if text is not None and not isinstance(text,str):
         raise TranscriptFetchError('Transcript size/type out of allowed range')
     segments_raw=data.get('segments') or []
     if not isinstance(segments_raw,list) or len(segments_raw)>1000:
@@ -70,6 +68,15 @@ def normalize_transcriptfetch(url:str,payload:dict)->dict|None:
             segments.append({'start':round(float(start),3),
                              'end':round(float(start+duration),3),
                              'text':spoken.strip()[:3000]})
+    # TranscriptFetch's documented timestamps=true response omits the
+    # redundant full 'text' field and returns just timestamped segments.
+    # Never discard real spoken text solely because 'text' was omitted.
+    if not (text or '').strip():
+        text=' '.join(segment['text'] for segment in segments)
+    if not text.strip():
+        return None
+    if len(text)>90000:
+        raise TranscriptFetchError('Transcript exceeds bounded storage budget')
     return {'provider':'transcriptfetch','source_url':original,
             'shortcode':shortcode,'text':text.strip(),
             'segments':segments,'provenance':'hosted_ai_speech_transcript_by_url',
