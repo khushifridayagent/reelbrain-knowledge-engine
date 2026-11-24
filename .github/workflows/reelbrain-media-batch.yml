@@ -1,6 +1,6 @@
 name: Reelbrain scheduled media batch (opt-in)
 
-# A bounded alternative to an always-on VM; scheduled runs are best-effort,
+# A bounded queue-driven alternative to an always-on VM; scheduled runs are best-effort,
 # not a guarantee of continuous service or successful Instagram downloads.
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
     paths:
       - '.github/workflows/reelbrain-media-batch.yml'
   schedule:
-    - cron: '7,17,27,37,47,57 * * * *'
+    - cron: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *'
 
 permissions:
   contents: read
@@ -132,18 +132,19 @@ jobs:
               raise SystemExit('Dedicated DB connection failed (' + type(exc).__name__ + '): check the full connection URI including password in the GitHub Actions secret.')
           print('Dedicated worker DB connectivity verified; credentials not printed.')
           PY
-      - name: Process at most one queued Reel and acknowledge outcome
+      - name: Drain up to four eligible Reels within a bounded runner window
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         run: |
           python - <<'PY'
-          from reelbrain.durable_worker import checked_config, run_one_batch
+          from reelbrain.durable_worker import checked_config
+          from reelbrain.queue_drain import drain_ready_queue
           from reelbrain.batch_outcome import require_successful_batch
-          # The worker writes failure categories to its isolated database and
-          # never logs private Reel URLs or the DB credential here.
-          result = run_one_batch(checked_config(), batch_size=1)
+          # Queue draining is bounded to four serial claims and an 11-minute
+          # pre-claim time budget (job timeout 14m; Postgres leases 15m).
+          # All media is transient and observations go to dedicated Postgres.
+          result = drain_ready_queue(checked_config(), max_jobs=4)
           print('Claimed jobs:', len(result))
           print('Outcomes:', [item['status'] for item in result])
-          # A successful retry/dead-letter ACK is NOT successful media analysis.
-          # Failing the run provides accurate GitHub Actions monitoring.
+          # Retry/defer ACK does NOT count as actual Reel extraction success.
           require_successful_batch(result)
           PY
