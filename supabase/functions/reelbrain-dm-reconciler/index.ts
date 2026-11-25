@@ -3,7 +3,7 @@
  * sender conversations; persists no raw private message texts or access tokens.
  * Can still report needs_review if Graph omits Reel attachments.
  */
-import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSessionWithFallback, listApprovedConversations, buildReceiptRecheck } from './core.mjs';
+import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSessionWithFallback, listApprovedConversations, buildReceiptRecheck, selectReviewPage, recoverApprovedMessage } from './core.mjs';
 const env=(k:string)=>Deno.env.get(k)?.trim()||'';
 const base=env('SUPABASE_URL').replace(/\/$/,'');
 const role=env('SUPABASE_SERVICE_ROLE_KEY');
@@ -53,14 +53,34 @@ Deno.serve(async req=>{
  for(const user of filtered){
    const sender=String(user.sender_id||'');if(!/^[0-9]{3,32}$/.test(sender)||sender===professional)continue;
    let checked=0,newSaved=0,unavailable=false,reason:string|null=null;
+   let reviewCursor:number|undefined;
    try{
      const history=await db('reelbrain_dm_receipts?select=message_id,status&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
-     const recheck=buildReceiptRecheck(history,2);
+     const recheck=buildReceiptRecheck(history,0);
      const session=await resolvePageSessionWithFallback(graph,token,testedToken,professional);
      const conv=await listApprovedConversations(graph,session,sender);
      const threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];
      console.info('reelbrain_dm_auth_mode',session.mode,session.credential_source);
      const events:any[]=[];
+     // Direct recheck of known unresolved receipts is independent of the latest 20-message window.
+     // The durable cursor ensures every receipt eventually receives its turn.
+     const state=await db('reelbrain_dm_reconciliation_state?select=review_cursor&sender_igsid=eq.'+sender+'&limit=1');
+     const cursor=Number(state?.[0]?.review_cursor||0);
+     const reviewBase='reelbrain_dm_receipts?select=id,message_id,status&sender_igsid=eq.'+sender+'&status=eq.needs_review&order=id.asc&limit=4';
+     let rows=await db(reviewBase+'&id=gt.'+cursor);
+     if(!rows?.length)rows=await db(reviewBase);
+     const review=selectReviewPage(rows,cursor,4);
+     // Bound the time spent on old receipts so new message intake is not starved.
+     const reviewStarted=Date.now();
+     for(const row of review.rows){
+       if(Date.now()-reviewStarted>24000)break;
+       try{
+         const recovered=await recoverApprovedMessage(graph,session.token,row.message_id,sender,professional);
+         if(recovered?.status==='queued')events.push(recovered);
+         checked++;
+         reviewCursor=Number(row.id);
+       }catch{unavailable=true;reason='graph_review_message_unavailable';reviewCursor=Number(row.id);}
+     }
      for(const thread of threads){
        if(!ident(String(thread.id||'')) || events.length>=8)continue;
        const tid=encodeURIComponent(thread.id);
@@ -75,7 +95,8 @@ Deno.serve(async req=>{
        for(const item of items){
          if(events.length>=8)break;
          const mid=String(item?.id||'');if(!ident(mid)||!datesAreRecent(item?.created_time)||!recheck.take(mid))continue;
-         let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'},session.token).catch(()=>null);
+         let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments,shares'},session.token).catch(()=>null);
+         if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'},session.token).catch(()=>null);}
          if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'},session.token).catch(()=>null);}
          if(!detail) {unavailable=true;reason='graph_message_detail_unavailable';continue;}
          if(!datesAreRecent(detail.created_time)||String(detail.from?.id)!==sender)continue;
@@ -99,7 +120,8 @@ Deno.serve(async req=>{
     await db('reelbrain_dm_reconciliation_state?on_conflict=sender_igsid',{
      method:'POST',headers:{prefer:'resolution=merge-duplicates,return=minimal'},
      body:JSON.stringify({sender_igsid:sender,last_checked_at:new Date().toISOString(),last_new_receipts:newSaved,
-       last_error:unavailable?(reason||'partial_graph_history_unavailable'):null})
+       last_error:unavailable?(reason||'partial_graph_history_unavailable'):null,
+       ...(reviewCursor===undefined?{}:{review_cursor:reviewCursor})})
     });
    }catch{errors++;}
  }
