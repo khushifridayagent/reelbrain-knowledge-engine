@@ -147,3 +147,23 @@ class ResumableMediaTests(unittest.TestCase):
         self.assertEqual(result[0]['status'],'deferred_progress')
         with self.assertRaises(RuntimeError):
             drain_overlapping({},max_jobs=1,process_batch=lambda config,batch_size:[{'status':'deferred_progress','acknowledged_failure':False}],time_remaining=lambda:10000)
+
+    def test_checkpoint_prefetch_reuses_exact_source_media_and_known_units(self):
+        from reelbrain.stage_checkpoint import StageCheckpoint
+        from tempfile import TemporaryDirectory
+        from contextlib import nullcontext
+        from unittest.mock import Mock
+        from reelbrain.contracts import Observation
+        pg=Mock();cur=Mock()
+        pg.transaction.side_effect=lambda:nullcontext()
+        pg.cursor.side_effect=lambda:nullcontext(cur)
+        with TemporaryDirectory() as d:
+            p=Path(d)/'asset.mp4';p.write_bytes(b'fixture')
+            cp=StageCheckpoint(pg,(9,'lease'),'https://instagram.com/reel/ABC123/',[p])
+            unit='knowledge-focus-v1:1:known'
+            cur.fetchall.return_value=[(cp._version(unit),[{'text':'workflow','kind':'ocr','locator':'frame:1','confidence':None}],17)]
+            cp.prefetch('ocr')
+            self.assertEqual(cp.load('ocr',unit=unit),([Observation('workflow',kind='ocr',locator='frame:1')],17))
+            self.assertIsNone(cp.load('ocr',unit='unknown'))
+            self.assertEqual(cur.execute.call_count,1)
+            self.assertEqual(cur.execute.call_args.args[1][:3],(cp.url,cp.sha,'ocr'))
