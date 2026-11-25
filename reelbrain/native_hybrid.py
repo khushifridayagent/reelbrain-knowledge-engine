@@ -8,7 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from itertools import islice
-import base64, hashlib, json, math, mimetypes, re, subprocess, time
+import base64, hashlib, json, math, mimetypes, os, re, subprocess, time
+from concurrent.futures import ThreadPoolExecutor
 from .contracts import Observation
 from .qwen_vl import QwenPartialVisualError
 
@@ -32,9 +33,9 @@ def digest(pixels):
     return h.hexdigest()
 
 def inspect_frames(frames,read,*,expected_frames=None,checkpoint=None,asset_index=0,
-                   chunk_size=8,max_new_chunks=8,deadline=None):
+                   chunk_size=8,max_new_chunks=8,deadline=None,parallelism=1):
     """Decode every native frame; cache each successful bounded unit and its manifest."""
-    if not 1<=chunk_size<=64 or max_new_chunks<1:raise ValueError('invalid native inspection budget')
+    if not 1<=chunk_size<=64 or max_new_chunks<1 or not 1<=parallelism<=4:raise ValueError('invalid native inspection budget')
     seen=set();retained=[];index=0;new_chunks=0
     stream=iter(frames)
     try:
@@ -59,14 +60,21 @@ def inspect_frames(frames,read,*,expected_frames=None,checkpoint=None,asset_inde
                     raise NativeInspectionPending('native coverage pending: resume checkpointed frames',retained)
                 began=time.monotonic();events=[];unit_seen=set()
                 try:
+                    work=[]
                     for f,key in zip(batch,keys):
                         if key in seen or key in unit_seen:continue
+                        unit_seen.add(key);work.append(f)
+                    def one(f):
                         found=read(f.pixels)
                         if not isinstance(found,list) or not all(isinstance(x,Observation) and x.kind in ('ocr','qr') for x in found):
                             raise TypeError('invalid native OCR response')
                         loc=f'frame:{f.index}@{f.timestamp_ms:.3f}ms'
-                        events.extend(Observation(x.text,kind=x.kind,locator=loc,confidence=x.confidence) for x in found if x.text.strip())
-                        unit_seen.add(key)
+                        return [Observation(x.text,kind=x.kind,locator=loc,confidence=x.confidence) for x in found if x.text.strip()]
+                    if parallelism>1 and len(work)>1:
+                        with ThreadPoolExecutor(max_workers=parallelism) as pool:
+                            for observations in pool.map(one,work):events.extend(observations)
+                    else:
+                        for f in work:events.extend(one(f))
                 except Exception:
                     raise NativeInspectionPending('native frame OCR or QR inspection failed',retained) from None
                 if checkpoint:
@@ -93,7 +101,7 @@ def read_pixels(pixels):
         ok,b=cv2.imencode('.png',img)
         if not ok:raise RuntimeError('frame encode failed')
         p=subprocess.run(['tesseract','stdin','stdout','-l','eng+hin','--psm','11'],
-                         input=b.tobytes(),capture_output=True,timeout=30)
+                         input=b.tobytes(),capture_output=True,timeout=30,env={**os.environ,'OMP_THREAD_LIMIT':'1'})
         if p.returncode:raise RuntimeError('native tesseract failed')
         return p.stdout.decode('utf-8',errors='replace').strip()
     results=[]
@@ -112,9 +120,9 @@ def read_pixels(pixels):
     return [Observation(x,kind='ocr') for x in results]+[Observation(x,kind='qr') for x in sorted(qr)]
 
 class NativeOCR:
-    def __init__(self,*,max_seconds=600,max_new_chunks=8):
+    def __init__(self,*,max_seconds=600,max_new_chunks=64,parallelism=2):
         self.deadline=time.monotonic()+max_seconds
-        self.max_new_chunks=max_new_chunks
+        self.max_new_chunks=max_new_chunks;self.parallelism=parallelism
     def analyze(self,path,*,checkpoint=None,asset_index=0):
         path=Path(path)
         if path.suffix.lower() in ('.jpg','.jpeg','.png','.webp'):
@@ -136,7 +144,7 @@ class NativeOCR:
                     yield Frame(i,float(f.pts*f.time_base)*1000.,f.to_ndarray(format='bgr24'))
             return inspect_frames(frames(),read_pixels,expected_frames=expected,
                                   checkpoint=checkpoint,asset_index=asset_index,
-                                  max_new_chunks=self.max_new_chunks,deadline=self.deadline)
+                                  max_new_chunks=self.max_new_chunks,deadline=self.deadline,parallelism=self.parallelism)
 
 class GeminiInlineVision:
     """The tested lab generateContent route. No provider-side stored file."""
@@ -208,7 +216,9 @@ class HybridVision:
                 if checkpoint:checkpoint.save('vlm',events,int((time.monotonic()-began)*1000),unit=unit)
                 return events
             except Exception as e:
-                if isinstance(e,QwenPartialVisualError):partial.extend(e.partial_observations)
+                if isinstance(e,QwenPartialVisualError):
+                    if 'coverage pending' in str(e).lower():raise
+                    partial.extend(e.partial_observations)
                 failures.append('quota exceeded' if 'quota' in str(e).lower() else 'unavailable')
         raise QwenPartialVisualError('quota exceeded' if 'quota exceeded' in failures else 'all visual providers unavailable',partial)
 
