@@ -47,6 +47,18 @@ def required_incomplete_stages(result):
             missing.add(stage)
     return sorted(missing)
 
+def classify_partial(errors):
+    """Distinguish explicit coverage yield, provider quota and unresolved errors."""
+    errors=errors or {}
+    for stage in ('vlm','asr'):
+        detail=str(errors.get(stage,'')).lower()
+        if any(t in detail for t in ('hybrid provider cooldown:','quota exceeded','rate limit','insufficient credits','resource exhausted','neuron quota','http 429','http 402')):
+            return 'deferred_model_quota'
+    progress=bool(errors) and all(
+        ('coverage pending' in str(value).lower() or 'resume checkpointed' in str(value).lower())
+        for value in errors.values())
+    return 'deferred_progress' if progress else 'deferred_incomplete'
+
 def retry_seconds(errors):
     from .model_quota_retry import model_quota_retry_seconds
     if not errors:return None
@@ -88,7 +100,7 @@ def drain_overlapping(config,*,max_jobs=4,process_batch=None,time_remaining=None
                 if not isinstance(batch,list):raise RuntimeError('Invalid worker response')
                 if not batch:exhausted=True
                 for item in batch:
-                    if item.get('status') in ('deferred_access','deferred_model_quota','retry_or_dead_letter') and not item.get('acknowledged_failure'):
+                    if item.get('status') in ('deferred_access','deferred_model_quota','deferred_progress','deferred_incomplete','retry_or_dead_letter') and not item.get('acknowledged_failure'):
                         raise RuntimeError('Unacknowledged durable failure')
                 outcomes.extend(batch)
             fill()
