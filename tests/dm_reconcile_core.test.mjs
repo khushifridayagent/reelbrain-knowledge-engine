@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reelEventsFromGraph, inspectParticipantIds, linkedPageId, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations, buildReceiptRecheck} from '../supabase/functions/reelbrain-dm-reconciler/core.mjs';
+import {reelEventsFromGraph, inspectParticipantIds, linkedPageId, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations, buildReceiptRecheck, resolvePageSessionWithFallback} from '../supabase/functions/reelbrain-dm-reconciler/core.mjs';
 const sender='12345001',business='12345002';
 test('Graph Reel attachment becomes a safe canonical receipt',()=>{
  const input=[{id:'mid.REEL1',from:{id:sender},created_time:'2026-11-23T21:23:00+0000',message:'',attachments:{data:[{type:'ig_reel',payload:{url:'https://www.instagram.com/reel/DaQLc80PIBU/?igsh=abc'}}]}}];
@@ -83,4 +83,27 @@ test('previous unresolved messages are eligible for bounded rechecks but linked 
 test('plain text is not a missing Reel receipt',()=>{
  const v=reelEventsFromGraph([{id:'mid.plain',from:{id:sender},message:'Hello'}],sender,business);
  assert.equal(v[0].status,'no_reel_link');
+});
+
+test('expired configured credential recovers only through tested linked Page credential',async()=>{
+ const calls=[];
+ const graph=async(path,params,credential)=>{
+  calls.push([path,credential]);
+  if(credential==='expired')throw new Error('graph_http_401_code_190_sub_463');
+  if(path==='me')throw new Error('graph_http_400_code_100');
+  return {data:[{id:'12345003',instagram_business_account:{id:business},access_token:'derived'}]};
+ };
+ const session=await resolvePageSessionWithFallback(graph,'expired','tested',business);
+ assert.equal(session.token,'derived');assert.equal(session.credential_source,'tested_system_user');
+ assert.deepEqual(calls,[['me','expired'],['me','tested'],['me/accounts','tested']]);
+});
+test('working primary credential is preserved; wrong asset cannot trigger fallback',async()=>{
+ let n=0;
+ const session=await resolvePageSessionWithFallback(async()=>{n++;return {id:'12345003',instagram_business_account:{id:business}}},'working','tested',business);
+ assert.equal(session.credential_source,'configured');assert.equal(n,1);
+ await assert.rejects(resolvePageSessionWithFallback(async()=>({id:'12345003',instagram_business_account:{id:'99999'}}),'wrong','tested',business),/meta_token_not_linked_page/);
+});
+test('no configured token can use the tested system user without changing secret values',async()=>{
+ const session=await resolvePageSessionWithFallback(async()=>({id:'12345003',instagram_business_account:{id:business}}),'','tested',business);
+ assert.equal(session.credential_source,'tested_system_user');
 });
