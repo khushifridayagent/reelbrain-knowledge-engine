@@ -124,6 +124,9 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                     if cf_vision:
                         providers.append(QwenVLResearcher(cf_vision['base_url'],model=cf_vision['model'],api_key=cf_vision['api_key'],max_frames=4,max_batches=8))
                     if not providers:raise RuntimeError('No explicitly authorized hybrid vision provider configured')
+                    for provider in providers:
+                        if isinstance(provider,QwenVLResearcher):
+                            provider.cooldown_key='cloudflare_vision' if provider.cloudflare_direct else 'groq_vision'
                     vlm=HybridVision(*providers)
                     if not hosted_audio and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
                         offline=FasterWhisperSpeechToText(os.getenv('REELBRAIN_LOCAL_ASR_MODEL','small'))
