@@ -10,6 +10,7 @@ class StageCheckpoint:
     def __init__(self,pg,lease,url,paths):
         self.pg,self.lease,self.url=pg,lease,url
         self._lock=RLock()
+        self._prefetched={}
         h=hashlib.sha256()
         for p in paths:
             h.update(p.stat().st_size.to_bytes(8,'big'))
@@ -19,7 +20,25 @@ class StageCheckpoint:
     @staticmethod
     def _version(unit):
         return VERSION if unit is None else VERSION+'-unit-'+hashlib.sha256(unit.encode()).hexdigest()
+    def prefetch(self,stage):
+        """Read bounded source/media-specific checkpoint metadata once for resume."""
+        with self._lock,self.pg.transaction():
+            with self.pg.cursor() as cur:
+                cur.execute("""select pipeline_version,observations,elapsed_ms
+                    from reelbrain_research.media_stage_checkpoints
+                    where source_url=%s and media_sha256=%s and stage=%s
+                    and pipeline_version like %s limit 4097""",
+                    (self.url,self.sha,stage,VERSION+'-unit-%'))
+                rows=cur.fetchall()
+            # Never infer absent rows when the bounded preload was truncated.
+            if len(rows)<=4096:
+                self._prefetched[stage]={version:([Observation(**x) for x in events],elapsed)
+                                         for version,events,elapsed in rows}
     def load(self,stage,*,unit=None):
+        version=self._version(unit)
+        with self._lock:
+            if unit is not None and stage in self._prefetched:
+                return self._prefetched[stage].get(version)
         with self._lock,self.pg.transaction():
             with self.pg.cursor() as cur:
                 cur.execute("""select observations,elapsed_ms from reelbrain_research.media_stage_checkpoints
@@ -39,6 +58,10 @@ class StageCheckpoint:
                     values (%s,%s,%s,%s,%s::jsonb,%s)
                     on conflict(source_url,media_sha256,pipeline_version,stage) do nothing""",
                     (self.url,self.sha,self._version(unit),stage,json.dumps([asdict(x) for x in events],ensure_ascii=False),elapsed))
+        # Existing persisted rows remain authoritative; do not cache a speculative write.
+        with self._lock:
+            if stage in self._prefetched and unit is not None:
+                self._prefetched[stage].setdefault(self._version(unit),(list(events),elapsed))
         print('STAGE_CHECKPOINT_SAVED stage='+stage+' observations='+str(len(events)),flush=True)
 
     @staticmethod
