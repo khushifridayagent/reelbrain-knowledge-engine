@@ -50,6 +50,8 @@ def required_incomplete_stages(result):
 def retry_seconds(errors):
     from .model_quota_retry import model_quota_retry_seconds
     if not errors:return None
+    if any('resume saved chunks' in str(v).lower() or 'resume checkpointed' in str(v).lower() or 'coverage pending' in str(v).lower() for v in errors.values()):
+        return 900
     return model_quota_retry_seconds(errors) or 3600
 
 def drain_overlapping(config,*,max_jobs=4,process_batch=None,time_remaining=None):
