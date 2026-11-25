@@ -1,0 +1,22 @@
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      STUDIO_INDEX_PATH: /app/data/index.sqlite
+    volumes:
+      - studio_index:/app/data
+      - studio_models:/app/models
+      - ./backend/certs:/app/certs:ro
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    env_file: ./frontend/.env
+    environment:
+      STUDIO_BACKEND_URL: http://backend:8000
+    ports:
+      - '127.0.0.1:3000:3000'
+    restart: unless-stopped
+volumes:
+  studio_index:
+  studio_models:

@@ -1,0 +1,4 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {authorized,sameOrigin} from '../lib/auth.mjs';
+const secret='a-strong-random-unique-secret-fixture';
+test('deny missing and wrong credentials',()=>{assert.equal(authorized(null,secret),false);assert.equal(authorized('Basic '+Buffer.from('owner:bad').toString('base64'),secret),false);assert.equal(authorized('Basic '+Buffer.from('owner:'+secret).toString('base64'),secret),true);assert.equal(authorized('Basic '+Buffer.from('owner:short').toString('base64'),'short'),false)});
+test('cross-origin requests cannot submit links or query knowledge',()=>{assert.equal(sameOrigin('https://evil.example','studio.example','https://studio.example'),false);assert.equal(sameOrigin(null,'studio.example','https://studio.example'),false);assert.equal(sameOrigin('https://studio.example','studio.example','https://studio.example'),true)});

@@ -1,0 +1,22 @@
+name: Studio independent validation and build
+on:
+  push:
+    branches: ['studio/chatbot-integration-v2']
+    paths: ['studio/**', '.github/workflows/studio-only-ci.yml']
+permissions:
+  contents: read
+jobs:
+  studio-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'fastapi>=0.115,<1' 'httpx>=0.28,<1' 'numpy>=1.26,<3'
+      - run: cd studio/backend && python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cd studio/frontend && npm install --no-audit --no-fund && npm test && npm run build

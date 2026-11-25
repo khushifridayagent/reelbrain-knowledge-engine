@@ -1,0 +1,1 @@
+Place the trusted Supabase database CA certificate here as `supabase-ca.crt`, obtained through the official project connection settings. TLS verification is mandatory. No credential or certificate is bundled. The Docker image mounts this path read-only at deployment.
