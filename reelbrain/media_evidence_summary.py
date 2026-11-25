@@ -31,8 +31,8 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
         if not text:
             continue
         row = {'kind': kind, 'locator': locator, 'text': text,
-               'evidence_level': 'source_observation' if kind in SOURCE_KINDS else 'model_inference'}
-        target = source if kind in SOURCE_KINDS else model
+               'evidence_level': 'source_observation' if kind in SOURCE_KINDS else ('uncertain_source_observation' if kind=='ocr_uncertain' else 'model_inference')}
+        target = source if kind in SOURCE_KINDS or kind=='ocr_uncertain' else model
         if len(target) < 80:
             target.append(row)
     ocr_succeeded = media_processed and 'ocr' in counts and 'ocr' not in errors
