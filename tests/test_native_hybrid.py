@@ -105,3 +105,23 @@ class NativeHybridTests(unittest.TestCase):
             import json
             manifests=[json.loads(e.text) for events,_ in cache.data.values() for e in events if e.kind=='native_manifest']
             self.assertEqual(sum(len(m) for m in manifests),4)
+
+    def test_parallel_native_inspection_preserves_exact_order_and_dedup(self):
+        a=np.zeros((4,4,3),np.uint8); b=a.copy();b[1,1]=[1,2,3]
+        c=b.copy();c[2,2]=[4,5,6]
+        frames=[Frame(0,0,a),Frame(1,16,b),Frame(2,32,a),Frame(3,48,c)]
+        def read(p):return [Observation(str(int(p.sum())),kind='ocr')]
+        expected=inspect_frames(frames,read,expected_frames=4,parallelism=1)
+        actual=inspect_frames(frames,read,expected_frames=4,parallelism=2)
+        self.assertEqual(actual,expected)
+
+    def test_progress_yield_does_not_restart_on_other_provider(self):
+        from reelbrain.qwen_vl import QwenPartialVisualError
+        class Progress:
+            def analyze(self,p):
+                raise QwenPartialVisualError('visual coverage pending',[Observation('done',kind='model_inference')])
+        class Never:
+            def analyze(self,p):raise AssertionError('fallback would repeat work')
+        with self.assertRaises(QwenPartialVisualError) as e:
+            HybridVision(Progress(),Never()).analyze(Path('sample.mp4'))
+        self.assertEqual(e.exception.partial_observations[0].text,'done')
