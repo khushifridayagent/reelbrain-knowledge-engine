@@ -107,3 +107,33 @@ test('no configured token can use the tested system user without changing secret
  const session=await resolvePageSessionWithFallback(async()=>({id:'12345003',instagram_business_account:{id:business}}),'','tested',business);
  assert.equal(session.credential_source,'tested_system_user');
 });
+
+test('direct unresolved receipt rotation covers every receipt and wraps without starvation',async()=>{
+ const {selectReviewPage}=await import('../supabase/functions/reelbrain-dm-reconciler/core.mjs');
+ const rows=Array.from({length:9},(_,i)=>({id:i+10,message_id:'mid.review'+i,status:'needs_review'}));
+ const a=selectReviewPage(rows,0,4);
+ const b=selectReviewPage(rows,a.cursor,4);
+ const d=selectReviewPage(rows,b.cursor,4);
+ assert.deepEqual([...a.rows,...b.rows,...d.rows].map(x=>x.id),[10,11,12,13,14,15,16,17,18]);
+ assert.equal(d.cursor,18);
+ assert.deepEqual(selectReviewPage(rows,d.cursor,4).rows.map(x=>x.id),[10,11,12,13]);
+});
+test('official shares field recovers native post URL without fabricating a shortcode',async()=>{
+ const {recoverApprovedMessage}=await import('../supabase/functions/reelbrain-dm-reconciler/core.mjs');
+ const graph=async(path,params)=>{assert.equal(path,'mid.review1');assert.match(params.fields,/shares/);return {id:'mid.review1',from:{id:sender},shares:{data:[{type:'ig_post',url:'https://www.instagram.com/p/RealPost9/?igsh=x'}]}}};
+ const v=await recoverApprovedMessage(graph,'fixture','mid.review1',sender,business);
+ assert.deepEqual(v.urls,['https://www.instagram.com/p/RealPost9/']);
+});
+test('documented native media id may resolve only via authorized exact Graph permalink',async()=>{
+ const {recoverApprovedMessage}=await import('../supabase/functions/reelbrain-dm-reconciler/core.mjs');
+ const graph=async(path)=>path==='mid.review2'?{id:'mid.review2',from:{id:sender},attachments:{data:[{type:'ig_post',payload:{ig_post_media_id:'17841412345678901'}}]}}:path==='17841412345678901'?{id:path,permalink:'https://www.instagram.com/p/Media9/'}:{data:[]};
+ const v=await recoverApprovedMessage(graph,'fixture','mid.review2',sender,business);
+ assert.deepEqual(v.urls,['https://www.instagram.com/p/Media9/']);
+ const blocked=await recoverApprovedMessage(async(path)=>{if(path==='mid.review2')return {id:path,from:{id:sender},attachments:{data:[{type:'ig_post',payload:{ig_post_media_id:'17841412345678901'}}]}};throw Error('graph_http_400_code_100')},'fixture','mid.review2',sender,business);
+ assert.equal(blocked.status,'needs_review');assert.deepEqual(blocked.urls,[]);
+});
+test('direct review refuses unrelated message identity and private sender',async()=>{
+ const {recoverApprovedMessage}=await import('../supabase/functions/reelbrain-dm-reconciler/core.mjs');
+ assert.equal(await recoverApprovedMessage(async()=>({id:'mid.other',from:{id:sender},message:'https://www.instagram.com/p/Real9/'}),'fixture','mid.review1',sender,business),null);
+ assert.equal(await recoverApprovedMessage(async()=>({id:'mid.review1',from:{id:'9999999'},message:'https://www.instagram.com/p/Real9/'}),'fixture','mid.review1',sender,business),null);
+});
