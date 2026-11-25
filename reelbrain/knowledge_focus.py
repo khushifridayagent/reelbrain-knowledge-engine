@@ -77,7 +77,7 @@ def focused_read(pixels):
 
 class FocusedOCR:
     checkpoint_version=VERSION
-    def __init__(self,*,max_seconds=600,max_new_chunks=64,parallelism=2):
+    def __init__(self,*,max_seconds=600,max_new_chunks=256,parallelism=2):
         self.deadline=time.monotonic()+max_seconds
         self.max_new_chunks=max_new_chunks;self.parallelism=parallelism
     def analyze(self,path,*,checkpoint=None,asset_index=0):
