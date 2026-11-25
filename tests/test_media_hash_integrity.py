@@ -16,10 +16,13 @@ class FakeCursor:
     def __exit__(self,*args):return False
     def execute(self,sql,params):
         self.db.calls.append((sql,params))
+    def executemany(self,sql,rows):
+        self.db.batches.append((sql,list(rows)))
+        for params in self.db.batches[-1][1]:self.execute(sql,params)
 
 
 class FakePg:
-    def __init__(self):self.calls=[]
+    def __init__(self):self.calls=[];self.batches=[]
     def transaction(self):return self
     def __enter__(self):return self
     def __exit__(self,*args):return False
@@ -50,6 +53,9 @@ class EvidencePersistenceTests(unittest.TestCase):
         insertion=next((sql,params) for sql,params in pg.calls if 'insert into reelbrain_research.reel_sources' in sql)
         self.assertEqual(insertion[1][3],hashlib.sha256(self.media.read_bytes()).hexdigest())
         self.assertIn('CASE',insertion[0].upper())
+        self.assertEqual(len(pg.batches),2)
+        self.assertEqual(len(pg.batches[0][1]),saved['observation_count'])
+        self.assertEqual(len(pg.batches[1][1]),saved['resource_citations'])
 
     def test_bad_missing_hash_cannot_be_saved_as_verified_media(self):
         result=self.engine.ingest(self.media,self.url)
