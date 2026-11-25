@@ -134,7 +134,7 @@ export async function recoverApprovedMessage(graph,credential,mid,sender,profess
  if(!validGraphId(mid)||String(sender)===String(professional))return null;
  const path=encodeURIComponent(mid);
  let item;
- try{item=await graph(path,{fields:'id,from,created_time,message,attachments,shares'},credential,4000);}
+ try{item=await graph(path,{fields:'id,from,created_time,message,attachments,shares{type,url,id}'},credential,4000);}
  catch(e){
   if(!unsupportedField(e))throw e;
   try{item=await graph(path,{fields:'id,from,created_time,message,attachments'},credential,4000);}
@@ -145,7 +145,7 @@ export async function recoverApprovedMessage(graph,credential,mid,sender,profess
  if(!event||event.urls.length)return event||null;
  if(!item.shares){
   try{
-   const shares=await graph(path+'/shares',{},credential,3000);
+   const shares=await graph(path+'/shares',{fields:'type,url,id'},credential,3000);
    event=reelEventsFromGraph([{...item,shares}],sender,professional)[0]||event;
   }catch{/* No URL is a review, not a successful recovery. */}
  }
