@@ -50,6 +50,9 @@ def required_incomplete_stages(result):
 def retry_seconds(errors):
     from .model_quota_retry import model_quota_retry_seconds
     if not errors:return None
+    import re
+    delays=[int(m.group(1)) for value in errors.values() if (m:=re.search(r'hybrid provider cooldown:(\d{1,6})',str(value)))]
+    if delays:return max(900,min(86400,min(delays)))
     if any('resume saved chunks' in str(v).lower() or 'resume checkpointed' in str(v).lower() or 'coverage pending' in str(v).lower() for v in errors.values()):
         return 900
     return model_quota_retry_seconds(errors) or 3600
