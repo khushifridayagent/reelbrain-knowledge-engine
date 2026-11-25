@@ -23,6 +23,12 @@ def require_successful_batch(outcomes: list[dict]) -> None:
             if not outcome.get("acknowledged_failure"):
                 raise RuntimeError("Model quota deferral was not acknowledged by the durable queue")
             raise RuntimeError("Hosted video/audio model quota unavailable; Reel safely queued for later retry")
+        if status in {"deferred_progress","deferred_incomplete"}:
+            if not outcome.get("acknowledged_failure"):
+                raise RuntimeError("Incomplete media deferral was not acknowledged by the durable queue")
+            if status == "deferred_progress":
+                raise RuntimeError("Media coverage pending; saved checkpoints will resume")
+            raise RuntimeError("Required media stage incomplete; durable retry scheduled")
         if status == "retry_or_dead_letter":
             if not outcome.get("acknowledged_failure"):
                 raise RuntimeError("Media failure was not acknowledged by the durable queue")

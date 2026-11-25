@@ -96,12 +96,13 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
                  json.dumps([source_trace],ensure_ascii=False),
                  summary['video_analyzed'],summary['audio_transcribed'],
                  summary['ocr_analyzed'],summary['processing_stage']))
-    from .resumable_media import retry_seconds
+    from .resumable_media import retry_seconds,classify_partial
     # Preserve successful OCR/ASR even when a remote model quota is exhausted.
     # Return a numeric retry hint only; never print provider error bodies.
-    retry_after=(retry_seconds({stage:(result.get('stage_errors') or {}).get(stage,'required modality not attempted') for stage in incomplete}) or 3600
-                 if status=='partial' else None)
+    retry_errors={stage:(result.get('stage_errors') or {}).get(stage,'required modality not attempted') for stage in incomplete}
+    retry_category=classify_partial(retry_errors) if status=='partial' else None
+    retry_after=(retry_seconds(retry_errors) or 3600 if status=='partial' else None)
     return {'source_url':canonical,'source_id':source_id,'observation_count':len(observations),
             'resource_citations':len(resources),'status':status,'persisted_in_postgres':True,
-            'transient_model_retry_seconds':retry_after,
+            'transient_model_retry_seconds':retry_after,'retry_category':retry_category,
             'incomplete_stages':incomplete}

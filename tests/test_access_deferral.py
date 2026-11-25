@@ -74,8 +74,31 @@ class AccessDeferralTests(unittest.TestCase):
                     'transient_model_retry_seconds':1}
         with patch('reelbrain.durable_worker.pg_open',return_value=conn):
             result=run_one_batch({'db_url':'fixture://','apify_token':''},processor=partial)
-        self.assertEqual(result[0]['status'],'deferred_model_quota')
+        self.assertEqual(result[0]['status'],'deferred_incomplete')
         self.assertNotIn('reelbrain_finish_dm_job','\n'.join(q for q,_ in conn.sql))
+
+    def test_progress_yield_is_lease_fenced_and_short(self):
+        from reelbrain.durable_worker import run_one_batch
+        conn=Connection()
+        with patch('reelbrain.durable_worker.pg_open',return_value=conn):
+            result=run_one_batch({'db_url':'fixture://','apify_token':''},
+                processor=lambda *a:{'persisted_in_postgres':True,'status':'partial','retry_category':'deferred_progress'})
+        self.assertEqual(result[0]['status'],'deferred_progress')
+        sql='\n'.join(q for q,_ in conn.sql)
+        self.assertIn("interval '60 seconds'",sql)
+        self.assertIn("status='leased' and lease_token=%s",sql)
+        self.assertNotIn('reelbrain_finish_dm_job',sql)
+
+    def test_targeted_acceptance_claim_is_restricted_to_requested_job(self):
+        from reelbrain.durable_worker import run_one_batch
+        conn=Connection()
+        with patch('reelbrain.durable_worker.pg_open',return_value=conn):
+            result=run_one_batch({'db_url':'fixture://','apify_token':''},
+                processor=lambda *a:{'persisted_in_postgres':True,'status':'evidence_saved'},
+                target_job_id=5)
+        self.assertEqual(result[0]['id'],5)
+        self.assertTrue(any('where id=%s' in q and args==(5,) and 'for update skip locked' in q for q,args in conn.sql))
+        self.assertNotIn('reelbrain_claim_dm_jobs','\n'.join(q for q,_ in conn.sql))
 
     def test_unknown_persisted_status_cannot_finish_as_processed(self):
         from reelbrain.durable_worker import run_one_batch

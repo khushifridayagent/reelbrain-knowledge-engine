@@ -108,7 +108,8 @@ class LocalPipelineEngine:
                         for ev in getattr(exc,'partial_observations',[]):
                             loc=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
                             observations.append(Observation(ev.text,kind=ev.kind,locator=loc,confidence=ev.confidence))
-                        raise NativeInspectionPending('native OCR incomplete; resume saved chunks',observations) from None
+                        reason=str(exc) if isinstance(exc,NativeInspectionPending) and str(exc) in ('focused coverage pending: time budget','focused coverage pending: chunk budget','focused decode count incomplete','focused OCR read failed','focused decoder or checkpoint failed') else 'native OCR incomplete; resume saved chunks'
+                        raise NativeInspectionPending(reason,observations) from None
                     if len(media_assets)==1:raise
                     slide_failures.append(f'slide:{idx:02d}:{type(exc).__name__}')
             return observations
