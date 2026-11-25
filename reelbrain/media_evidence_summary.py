@@ -66,6 +66,7 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
             'media_provider': str(result.get('provider') or '')[:100],
             'stage_observations': {str(k)[:30]: int(v) for k, v in counts.items() if isinstance(v, (int, float))},
             'stage_errors': {str(k)[:30]: str(v)[:240] for k, v in errors.items()},
+            'optional_stage_errors': {str(k)[:30]: str(v)[:240] for k,v in (result.get('optional_stage_errors') or {}).items()},
             'unattempted_modalities': list(result.get('unattempted_modalities', []))[:10],
             'completeness': 'NOT_AUDITED',
             'verification_note': 'OCR/ASR are source observations; Gemini/VLM descriptions are model inference only. External claims are not independently verified.'

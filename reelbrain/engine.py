@@ -161,7 +161,7 @@ class LocalPipelineEngine:
         tasks={'ocr':read_all_pages}
         if self.audio_model is not None and video_assets:tasks['asr']=transcribe_all
         if self.video_model is not None:tasks['vlm']=video_understanding
-        measurements={};errors={};results={}
+        measurements={};errors={};optional_errors={};results={}
         def timed(label,func):
             start=time.monotonic()
             try:return func(),int((time.monotonic()-start)*1000)
@@ -237,7 +237,7 @@ class LocalPipelineEngine:
                 saved['facts_rejected']+=stored['rejected']
                 measurements['fact_enrichment']=int((time.monotonic()-start)*1000)
             except Exception as exc:
-                errors['fact_enrichment']=f'{type(exc).__name__}: {exc}'[:250]
+                optional_errors['fact_enrichment']=type(exc).__name__+': optional enrichment unavailable'
         original_evidence=any(ev.kind in {'ocr','qr','asr','caption','manual','verified_doc'}
                               and ev.text.strip() for ev in observations)
         model_only_evidence=any(ev.kind=='model_inference' and ev.text.strip()
@@ -266,7 +266,7 @@ class LocalPipelineEngine:
                 model_only_partial=bool(model_only_evidence and not original_evidence))
             saved['processing_receipt_id']=receipt
             saved['media_sha256']=sha.hexdigest()
-        saved.update({'stage_errors':errors,'stage_timings_ms':measurements,'stage_observations':{**{k:len(v) for k,v in results.items()},'provided':len(extra)},'external_calls':external_count,'media_is_local':True,
+        saved.update({'stage_errors':errors,'optional_stage_errors':optional_errors,'stage_timings_ms':measurements,'stage_observations':{**{k:len(v) for k,v in results.items()},'provided':len(extra)},'external_calls':external_count,'media_is_local':True,
                       'knowledge_completeness':'NOT_AUDITED','asset_count':len(media_assets),'audio_required':bool(video_assets),
                       'unattempted_modalities':([stage for stage,active in (('asr',self.audio_model is not None),('video_model',self.video_model is not None),('structured_fact_model',self.fact_model is not None)) if not active])})
         return saved

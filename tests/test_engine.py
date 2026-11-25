@@ -68,3 +68,20 @@ class DeepAgentIntegration(unittest.TestCase):
                 self.assertEqual(result['external_calls'],2)
                 self.assertIn('use_case',str(db.search('onyx',tenant='research')[0]['facts']))
             finally:db.close()
+
+    def test_optional_enrichment_failure_does_not_block_complete_media(self):
+        from reelbrain.engine import LocalPipelineEngine
+        from reelbrain.media_evidence_summary import build_media_summary
+        class BrokenEnrichment:
+            def extract(self,observations,supported_urls):raise RuntimeError('optional unavailable')
+        with tempfile.TemporaryDirectory() as d:
+            db=KnowledgeStore(Path(d)/'deep.db')
+            try:
+                p=Path(d)/'clip.png';p.write_bytes(b'fixture')
+                engine=LocalPipelineEngine(db,ocr=lambda _:[Observation('Visible workflow: install, configure, run',kind='ocr')],video_model=FakeVideo(),fact_model=BrokenEnrichment())
+                result=engine.ingest(p,'https://instagram.com/p/Repo123/',allow_external=True)
+                self.assertEqual(result['status'],'evidence_saved')
+                self.assertNotIn('fact_enrichment',result['stage_errors'])
+                self.assertIn('fact_enrichment',result['optional_stage_errors'])
+                self.assertEqual(build_media_summary([{'kind':'ocr','verbatim':'workflow','locator':'image:1'}],{**result,'media_processed':True})['processing_stage'],'completed')
+            finally:db.close()
