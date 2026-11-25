@@ -27,6 +27,16 @@ class API(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.env=patch.dict(os.environ,{'STUDIO_BACKEND_TOKEN':'x'*32});self.env.start();self.s=Services(Path(self.tmp.name)/'i.sqlite');self.client=TestClient(create_app(self.s));self.auth={'Authorization':'Bearer '+'x'*32}
     def tearDown(self):self.client.close();self.s.index.con.close();self.env.stop();self.tmp.cleanup()
+    def test_auto_count_and_evidence_only_detail(self):
+        result=self.client.post('/search',headers=self.auth,json={'question':'How many saved reels?'})
+        self.assertEqual(result.json()['counts']['total'],2)
+        with patch.object(self.s.llm,'summarize',return_value=None):
+            result=self.client.post('/detail',headers=self.auth,json={'question':'workflow details','sources':['https://www.instagram.com/reel/Abcd/']})
+        answer=result.json()['answer']
+        self.assertEqual(answer['kind'],'saved_excerpts')
+        self.assertEqual(answer['citations'],['S1'])
+        self.assertIn('Alpaca trading workflow',answer['answer'])
+
     def test_all_data_routes_require_auth(self):
         for endpoint in ('search','detail','submit','counts'):
             self.assertEqual(self.client.post('/'+endpoint,json={}).status_code,401)

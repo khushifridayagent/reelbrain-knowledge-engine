@@ -68,6 +68,21 @@ def create_app(services=None):
     def ready():
         try:return s.refresh()
         except Exception:raise HTTPException(503,'Private index unavailable. Check Studio credentials and model runtime.') from None
+    def evidence_answer(answer, cards):
+        if answer or not cards:
+            return answer
+        excerpts = []
+        citations = []
+        for i, card in enumerate(cards[:5], 1):
+            first = next((e for e in card['evidence'] if e['text'].strip()), None)
+            if first:
+                citation = f'S{i}'
+                citations.append(citation)
+                excerpts.append(f"[{citation}] {first['kind']} · {first['locator']}\n{first['text'][:450]}")
+        if not excerpts:
+            return None
+        return {'answer': '\n\n'.join(excerpts), 'citations': citations, 'kind': 'saved_excerpts'}
+
     @app.get('/health')
     def health():return {'status':'ok'}
     @app.get('/ready',dependencies=[Depends(authorize)])
@@ -109,6 +124,14 @@ def create_app(services=None):
                 with s.lock:s.open()
                 return {'mode':'count','counts':s.db.stats(f),'sources':[]}
             except Exception:raise HTTPException(503,'Private count query unavailable') from None
+        library_count = re.fullmatch(
+            r'(?i)(?:how many|count|total|kitne|कितने)\s+(?:saved\s+)?'
+            r'(?:reels|posts|items|sources|jobs|रील्स|रील)(?:\s+(?:are there|saved|हैं))?[? ]*', q
+        )
+        if body.mode == 'auto' and library_count:
+            with s.lock:
+                s.open()
+            return {'mode': 'count', 'counts': s.db.stats(f), 'sources': []}
         sync=ready();queries,intent=s.llm.plan(q);mode=body.mode if body.mode!='auto' else intent
         if mode=='count' and body.mode=='auto' and not f.get('tool'):
             # Count questions on an explicit saved corpus or metadata filter only;
@@ -119,9 +142,9 @@ def create_app(services=None):
         if mode=='count':return {'mode':'count','counts':s.db.stats(f),'sync':sync,'sources':[]}
         if mode=='all':
             x=s.index.search(q,queries,f,min(body.limit,20),enumerate_all=True,offset=body.offset);cards=x['results'];answer=s.llm.map_reduce(q,cards) if cards else None
-            return {'mode':'all','sources':cards,'answer':answer,'queries':queries,'total_keyword_matches':x['total_keyword_matches'],'next_offset':x['next_offset'],'sync':sync,'note':'Keyword enumeration; semantic matches are not guaranteed exhaustive. Summary covers this page.'}
+            return {'mode':'all','sources':cards,'answer':evidence_answer(answer,cards),'queries':queries,'total_keyword_matches':x['total_keyword_matches'],'next_offset':x['next_offset'],'sync':sync,'note':'Keyword enumeration; semantic matches are not guaranteed exhaustive. Summary covers this page.'}
         cards=s.index.search(q,queries,f,min(body.limit,8));answer=s.llm.summarize(q,cards) if cards else None
-        return {'mode':'search','sources':cards,'answer':answer,'queries':queries,'sync':sync,'note':'Source evidence is available even when LLM synthesis is disabled or unavailable.'}
+        return {'mode':'search','sources':cards,'answer':evidence_answer(answer,cards),'queries':queries,'sync':sync,'note':'Source evidence is available even when LLM synthesis is disabled or unavailable.'}
     @app.post('/detail',dependencies=[Depends(authorize)])
     def detail(body:DetailBody):
         ready()
@@ -143,7 +166,7 @@ def create_app(services=None):
                     links.extend(u.rstrip('.,);') for u in re.findall(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',e['text']) if github_repo(u))
             ext=s.research.run(query,links)
         answer=s.llm.summarize(context,cards,ext['documents'],detail=True)
-        return {'sources':cards,'answer':answer,'public_sources':ext['documents'],'warnings':ext['warnings'],'note':'Public research is independent of saved Reel evidence. Review source links; no code execution was performed.'}
+        return {'sources':cards,'answer':evidence_answer(answer,cards),'public_sources':ext['documents'],'warnings':ext['warnings'],'note':'Public research is independent of saved Reel evidence. Review source links; no code execution was performed.'}
     @app.post('/submit',dependencies=[Depends(authorize)])
     def submit(body:SubmitBody):
         try:url=canonical_instagram(body.url)
