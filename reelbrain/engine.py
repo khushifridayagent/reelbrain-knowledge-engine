@@ -135,7 +135,7 @@ class LocalPipelineEngine:
                             ev.text,kind='model_inference',
                             locator=locator,confidence=ev.confidence))
                 try:
-                    if checkpoint is not None and (isinstance(self.video_model,QwenVLResearcher) or getattr(self.video_model,'supports_checkpoint',False)):
+                    if checkpoint is not None and (isinstance(self.video_model,QwenVLResearcher) or getattr(self.video_model,'supports_checkpoint',False) is True):
                         add_results(self.video_model.analyze(asset,checkpoint=checkpoint,asset_index=idx))
                     else:
                         add_results(self.video_model.analyze(asset))
@@ -167,7 +167,7 @@ class LocalPipelineEngine:
             except Exception:raise
         def stage_unit(label):
             if label=='ocr' and self.native_ocr is not None:return 'native-hybrid-v1:full-ocr'
-            if label=='vlm' and getattr(self.video_model,'supports_checkpoint',False):return 'native-hybrid-v1:full-vlm'
+            if label=='vlm' and getattr(self.video_model,'supports_checkpoint',False) is True:return 'native-hybrid-v1:full-vlm'
             return None
         if checkpoint:
             for label in list(tasks):
