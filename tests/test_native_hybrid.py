@@ -185,3 +185,32 @@ class NativeHybridTests(unittest.TestCase):
         from reelbrain.resumable_media import retry_seconds
         self.assertEqual(retry_seconds({'vlm':'QwenPartialVisualError: hybrid provider cooldown:1200'}),1200)
         self.assertEqual(retry_seconds({'vlm':'QwenPartialVisualError: hybrid provider cooldown:30'}),900)
+
+    def test_gemini_large_video_segments_resume_without_repeat(self):
+        from tempfile import TemporaryDirectory
+        import subprocess
+        from reelbrain.qwen_vl import QwenPartialVisualError
+        class Probe(GeminiInlineVision):
+            def __init__(self):
+                super().__init__('fixture',segment_seconds=1,max_new_segments=1)
+                self.calls=0
+            def _inline(self,path):
+                self.calls+=1
+                self.assert_segment(path)
+                return [Observation('visual fixture',kind='model_inference',locator='gemini:00:00')]
+            def assert_segment(self,path):
+                assert path.is_file() and path.stat().st_size>0
+        with TemporaryDirectory() as d:
+            p=Path(d)/'fixture.mp4'
+            subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=160x90:rate=10:duration=3',
+                            '-an','-c:v','libx264',str(p)],check=True,timeout=20)
+            cache=Cache();vision=Probe()
+            for expected in (1,2):
+                with self.assertRaises(QwenPartialVisualError) as e:
+                    vision._analyze_segments(p,checkpoint=cache,asset_index=1)
+                self.assertIn('coverage pending',str(e.exception))
+                self.assertEqual(len(e.exception.partial_observations),expected)
+            events=vision._analyze_segments(p,checkpoint=cache,asset_index=1)
+            self.assertEqual(vision.calls,3)
+            self.assertEqual(len(events),3)
+            self.assertEqual(len({x.locator for x in events}),3)
