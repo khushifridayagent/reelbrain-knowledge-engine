@@ -63,6 +63,8 @@ jobs:
       REELBRAIN_LOCAL_ASR_MODEL: 'small'
       # External hosted visual inference requires an actual GPU service
       # and explicit opt-in; repository secrets never enter GitHub code.
+      REELBRAIN_NATIVE_HYBRID_ENABLED: ${{ vars.REELBRAIN_NATIVE_HYBRID_ENABLED || '0' }}
+      REELBRAIN_HYBRID_FREE_PROVIDERS_CONFIRMED: ${{ vars.REELBRAIN_HYBRID_FREE_PROVIDERS_CONFIRMED || '0' }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       # Optional Cloudflare-hosted Qwen 3.8 vision: no local GPU host,
