@@ -79,7 +79,7 @@ def focused_read(pixels):
 
 class FocusedOCR:
     checkpoint_version=VERSION
-    def __init__(self,*,max_seconds=600,max_new_chunks=256,parallelism=2):
+    def __init__(self,*,max_seconds=900,max_new_chunks=256,parallelism=2):
         self.deadline=time.monotonic()+max_seconds
         self.max_new_chunks=max_new_chunks;self.parallelism=parallelism
     def analyze(self,path,*,checkpoint=None,asset_index=0):
@@ -106,14 +106,19 @@ class FocusedOCR:
                     cached=checkpoint.load('ocr',unit=unit) if checkpoint else None
                     if cached is not None:retained.extend(cached[0]);continue
                     if new>=self.max_new_chunks or time.monotonic()>=self.deadline:
-                        raise NativeInspectionPending('focused coverage pending: resume saved chunks',unique_knowledge(retained))
+                        reason='chunk budget' if new>=self.max_new_chunks else 'time budget'
+                        print(f'FOCUSED_YIELD reason={reason} screened={screened} selected={selected} new_chunks={new}',flush=True)
+                        raise NativeInspectionPending('focused coverage pending: '+reason,unique_knowledge(retained))
                     began=time.monotonic()
                     missing={}
                     for f,k in zip(batch,keys):
                         if k not in exact_reads and k not in missing:missing[k]=f
-                    with ThreadPoolExecutor(max_workers=self.parallelism) as pool:
-                        for k,events in zip(missing,pool.map(lambda f:focused_read(f.pixels),missing.values())):
-                            exact_reads[k]=events
+                    try:
+                        with ThreadPoolExecutor(max_workers=self.parallelism) as pool:
+                            for k,events in zip(missing,pool.map(lambda f:focused_read(f.pixels),missing.values())):
+                                exact_reads[k]=events
+                    except Exception:
+                        raise NativeInspectionPending('focused OCR read failed',unique_knowledge(retained)) from None
                     rows=[Observation(e.text,kind=e.kind,locator=f'frame:{f.index}@{f.timestamp_ms:.3f}ms',confidence=e.confidence)
                           for f,k in zip(batch,keys) for e in exact_reads[k]]
                     # Bounded text-only cache; do not evict until this batch is materialized.
@@ -122,12 +127,13 @@ class FocusedOCR:
                     if checkpoint:checkpoint.save('ocr',rows,int((time.monotonic()-began)*1000),unit=unit)
                     retained.extend(rows);new+=1
                 if not screened or (expected is not None and screened!=expected):
-                    raise RuntimeError('focused decode count incomplete')
+                    print(f'FOCUSED_DECODE_COUNT_MISMATCH screened={screened} expected={expected}',flush=True)
+                    raise NativeInspectionPending('focused decode count incomplete',unique_knowledge(retained))
                 # Store counts only, not per-frame fingerprints or pictures.
                 print(f'FOCUSED_SCREEN frames={screened} selected={selected} observations={len(unique_knowledge(retained))}',flush=True)
                 return unique_knowledge(retained)
             except NativeInspectionPending:raise
-            except Exception:raise NativeInspectionPending('focused OCR incomplete; resume saved chunks',unique_knowledge(retained)) from None
+            except Exception:raise NativeInspectionPending('focused decoder or checkpoint failed',unique_knowledge(retained)) from None
             finally:candidates.close()
         if path.suffix.lower() in ('.jpg','.jpeg','.png','.webp'):
             pixels=cv2.imread(str(path))
