@@ -152,3 +152,13 @@ class NativeHybridTests(unittest.TestCase):
         observations=[{'kind':'ocr','verbatim':'test','locator':'frame:0'}]
         self.assertEqual(build_media_summary(observations,r)['processing_stage'],'completed')
         self.assertFalse(build_media_summary(observations,r)['audio_transcribed'])
+
+    def test_native_audio_stream_detection_is_fail_closed(self):
+        from tempfile import TemporaryDirectory
+        import subprocess
+        from reelbrain.native_hybrid import has_audio_stream
+        with TemporaryDirectory() as d:
+            p=Path(d)/'silent.mp4'
+            subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=white:s=64x64:d=0.2','-an','-c:v','libx264',str(p)],check=True,timeout=10)
+            self.assertFalse(has_audio_stream(p))
+            self.assertTrue(has_audio_stream(Path(d)/'missing.mp4'))
