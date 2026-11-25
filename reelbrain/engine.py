@@ -75,8 +75,11 @@ class LocalPipelineEngine:
         # Local CPU Whisper is genuinely offline. Only adapters that could
         # transfer audio/video to another host need an external-upload opt-in.
         # Treat adapters without an explicit marker as remote by default.
-        video_present=any(p.suffix.lower() in {'.mp4','.mov','.mkv','.webm','.avi'}
-                          for p in media_assets)
+        video_assets=[p for p in media_assets if p.suffix.lower() in {'.mp4','.mov','.mkv','.webm','.avi'}]
+        if self.native_ocr is not None:
+            from .native_hybrid import has_audio_stream
+            video_assets=[p for p in video_assets if has_audio_stream(p)]
+        video_present=bool(video_assets)
         adapters=(
             (self.audio_model,video_present),
             (self.video_model,True),
@@ -109,8 +112,6 @@ class LocalPipelineEngine:
                     if len(media_assets)==1:raise
                     slide_failures.append(f'slide:{idx:02d}:{type(exc).__name__}')
             return observations
-        video_assets=[p for p in media_assets if p.suffix.lower() in
-                      {'.mp4','.mov','.mkv','.webm','.avi'}]
         def transcribe_all():
             observations=[]
             for idx,asset in enumerate(media_assets,1):
