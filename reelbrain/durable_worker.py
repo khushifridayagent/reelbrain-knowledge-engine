@@ -290,13 +290,27 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                     # evidence, then return the original source to the durable
                     # queue until capacity resets. Do NOT mark partial as
                     # terminal or burn finite source attempts on free quotas.
+                    category=r.get('retry_category')
+                    if category not in ('deferred_progress','deferred_model_quota','deferred_incomplete'):
+                        category='deferred_incomplete'
                     with pg.cursor() as cur:
-                        cur.execute('select public.reelbrain_defer_dm_job(%s,%s,%s,%s)',
-                                    (job_id,token,'Incomplete media stage; automatic retry',quota_retry))
-                        ok=cur.fetchone()[0]
+                        if category=='deferred_progress':
+                            # A bounded local yield is not provider quota or an access failure.
+                            # Lease fencing and the transaction prevent another worker claiming twice.
+                            cur.execute("""update public.reelbrain_dm_jobs set status='queued',
+                                attempts=greatest(0,attempts-1),lease_token=null,lease_until=null,
+                                available_at=now()+interval '60 seconds',updated_at=now(),
+                                last_error='Media coverage pending; resume saved checkpoints'
+                                where id=%s and status='leased' and lease_token=%s returning id""",(job_id,token))
+                            ok=cur.fetchone() is not None
+                        else:
+                            reason=('Model quota temporarily unavailable' if category=='deferred_model_quota'
+                                    else 'Required media stage incomplete; automatic retry')
+                            cur.execute('select public.reelbrain_defer_dm_job(%s,%s,%s,%s)',(job_id,token,reason,quota_retry))
+                            ok=cur.fetchone()[0]
                     pg.commit()
-                    if not ok:raise RuntimeError('Failed to acknowledge model quota deferral')
-                    done.append({'id':job_id,'status':'deferred_model_quota',
+                    if not ok:raise RuntimeError('Failed to acknowledge incomplete media deferral')
+                    done.append({'id':job_id,'status':category,
                                  'source_url':url,'acknowledged_failure':True})
                     continue
                 with pg.cursor() as cur:
