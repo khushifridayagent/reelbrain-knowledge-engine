@@ -237,3 +237,27 @@ class NativeHybridTests(unittest.TestCase):
         from reelbrain.knowledge_focus import unique_knowledge
         rows=[Observation('same procedure',kind='ocr',locator='frame:1'),Observation('same procedure',kind='ocr',locator='frame:2'),Observation('new command',kind='ocr',locator='frame:3'),Observation('https://qr.example/old',kind='qr')]
         self.assertEqual([r.locator for r in unique_knowledge(rows)],['frame:1','frame:3'])
+
+    def test_focused_default_finishes_more_than_64_chunks_without_dropping_frames(self):
+        from reelbrain.knowledge_focus import FocusedOCR
+        from reelbrain.native_hybrid import Frame
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from contextlib import nullcontext
+        from fractions import Fraction
+        import numpy as np
+        pixels=np.zeros((8,8,3),np.uint8)
+        class Decoded:
+            time_base=Fraction(1,60)
+            def __init__(self,i):self.pts=i
+            def to_ndarray(self,format):return pixels
+        video=SimpleNamespace(frames=520)
+        container=SimpleNamespace(streams=SimpleNamespace(video=[video]),decode=lambda _: (Decoded(i) for i in range(520)))
+        with patch('av.open',return_value=nullcontext(container)),patch('reelbrain.knowledge_focus.focused_candidates',side_effect=lambda frames:iter(frames)),patch('reelbrain.knowledge_focus.focused_read',return_value=[Observation('visible technical instruction',kind='ocr')]) as ocr:
+            cache=Cache()
+            result=FocusedOCR().analyze(Path('fixture.mp4'),checkpoint=cache,asset_index=1)
+            self.assertEqual(ocr.call_count,520)
+            self.assertEqual(len(cache.data),65)
+            self.assertEqual(len(result),1)
+            FocusedOCR().analyze(Path('fixture.mp4'),checkpoint=cache,asset_index=1)
+            self.assertEqual(ocr.call_count,520)
