@@ -58,6 +58,7 @@ jobs:
       # Separate opt-in public media API, no changes to hosted speech configuration.
       REELBRAIN_MEDIA_SCRAPECREATORS_ENABLED: ${{ vars.REELBRAIN_MEDIA_SCRAPECREATORS_ENABLED || '0' }}
       REELBRAIN_MEDIA_SCRAPECREATORS_API_KEY: ${{ secrets.REELBRAIN_MEDIA_SCRAPECREATORS_API_KEY }}
+      REELBRAIN_POST_APIFY_API_TOKEN: ${{ secrets.REELBRAIN_POST_APIFY_API_TOKEN }}
       # Free open-source CPU speech fallback (downloaded/cached on demand).
       REELBRAIN_ENABLE_LOCAL_ASR: '1'
       REELBRAIN_LOCAL_ASR_MODEL: 'small'
