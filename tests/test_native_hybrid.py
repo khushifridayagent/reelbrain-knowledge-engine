@@ -214,3 +214,26 @@ class NativeHybridTests(unittest.TestCase):
             self.assertEqual(vision.calls,3)
             self.assertEqual(len(events),3)
             self.assertEqual(len({x.locator for x in events}),3)
+
+    def test_focused_inspection_catches_single_frame_text_without_qr(self):
+        from reelbrain.knowledge_focus import focused_candidates, focused_read
+        from PIL import Image, ImageDraw, ImageFont
+        from unittest.mock import patch
+        from reelbrain.native_hybrid import Frame
+        base=np.full((360,960,3),240,np.uint8)
+        im=Image.fromarray(base.copy())
+        ImageDraw.Draw(im).text((25,130),'https://example.org/rb7',font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',40),fill='black')
+        changed=np.asarray(im).copy()
+        frames=[Frame(i,i*1000/60,changed if i==17 else base) for i in range(60)]
+        chosen=list(focused_candidates(frames))
+        self.assertIn(17,[f.index for f in chosen])
+        self.assertLess(len(chosen),10)
+        with patch('cv2.QRCodeDetector',side_effect=AssertionError('QR must not run')):
+            observations=focused_read(changed)
+        self.assertTrue(any('https://example.org/rb7' in x.text for x in observations))
+        self.assertTrue(all(x.kind in ('ocr','ocr_uncertain') for x in observations))
+
+    def test_focused_duplicate_text_keeps_first_locator(self):
+        from reelbrain.knowledge_focus import unique_knowledge
+        rows=[Observation('same procedure',kind='ocr',locator='frame:1'),Observation('same procedure',kind='ocr',locator='frame:2'),Observation('new command',kind='ocr',locator='frame:3'),Observation('https://qr.example/old',kind='qr')]
+        self.assertEqual([r.locator for r in unique_knowledge(rows)],['frame:1','frame:3'])
