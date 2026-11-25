@@ -66,7 +66,7 @@ def inspect_frames(frames,read,*,expected_frames=None,checkpoint=None,asset_inde
                         unit_seen.add(key);work.append(f)
                     def one(f):
                         found=read(f.pixels)
-                        if not isinstance(found,list) or not all(isinstance(x,Observation) and x.kind in ('ocr','qr') for x in found):
+                        if not isinstance(found,list) or not all(isinstance(x,Observation) and x.kind in ('ocr','qr','ocr_uncertain') for x in found):
                             raise TypeError('invalid native OCR response')
                         loc=f'frame:{f.index}@{f.timestamp_ms:.3f}ms'
                         return [Observation(x.text,kind=x.kind,locator=loc,confidence=x.confidence) for x in found if x.text.strip()]
@@ -92,6 +92,25 @@ def inspect_frames(frames,read,*,expected_frames=None,checkpoint=None,asset_inde
         close=getattr(stream,'close',None)
         if close:close()
 
+def reconcile_ocr_reads(readings,qr):
+    """Keep literal disagreements out of the supported-resource index."""
+    from collections import Counter
+    from .contracts import candidate_urls
+    votes=Counter()
+    for raw in readings:
+        votes.update({x.url for x in candidate_urls(raw)})
+    out=[];seen=set()
+    for raw in readings:
+        if not raw.strip() or raw in seen:continue
+        seen.add(raw)
+        urls={x.url for x in candidate_urls(raw)}
+        kind='ocr_uncertain' if any(votes[u]<2 for u in urls) else 'ocr'
+        out.append(Observation(raw,kind=kind))
+    for x in sorted(set(qr)):
+        if isinstance(x,str) and x.strip() and len(x.encode('utf-8'))<=2048 and not any(ord(ch)<32 for ch in x):
+            out.append(Observation(x,kind='qr'))
+    return out
+
 def read_pixels(pixels):
     """Original resolution plus overlapping enlarged regions, independent QR read."""
     import cv2
@@ -110,14 +129,14 @@ def read_pixels(pixels):
             scale=min(1.5,2400/max(img.shape[:2]))
             if scale>1:img=cv2.resize(img,None,fx=scale,fy=scale,interpolation=cv2.INTER_CUBIC)
         text=ocr(img)
-        if text and text not in results:results.append(text)
+        if text:results.append(text)
     det=cv2.QRCodeDetector()
     qr=set()
     found,values,_,_=det.detectAndDecodeMulti(pixels)
     if found:qr.update(x for x in values if x)
     value,_,_=det.detectAndDecode(pixels)
     if value:qr.add(value)
-    return [Observation(x,kind='ocr') for x in results]+[Observation(x,kind='qr') for x in sorted(qr)]
+    return reconcile_ocr_reads(results,qr)
 
 class NativeOCR:
     def __init__(self,*,max_seconds=600,max_new_chunks=64,parallelism=2):
@@ -220,7 +239,7 @@ class HybridVision:
                     if 'coverage pending' in str(e).lower():raise
                     partial.extend(e.partial_observations)
                 failures.append('quota exceeded' if 'quota' in str(e).lower() else 'unavailable')
-        raise QwenPartialVisualError('quota exceeded' if 'quota exceeded' in failures else 'all visual providers unavailable',partial)
+        raise QwenPartialVisualError('hybrid provider rate limit; retry later' if 'quota exceeded' in failures else 'all visual providers unavailable',partial)
 
 class SpeechFallback:
     requires_external=True
