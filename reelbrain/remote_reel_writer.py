@@ -61,14 +61,14 @@ def save_reel_to_postgres(local:KnowledgeStore,pg,url:str,result:dict)->dict:
                   stage_errors=excluded.stage_errors,updated_at=now()''',
                 (canonical,source_id,status,media_sha,result.get('knowledge_completeness','NOT_AUDITED'),
                  json.dumps(result.get('stage_timings_ms',{})),json.dumps(result.get('stage_errors',{}))))
-            for ev in observations:
-                cur.execute('''insert into reelbrain_research.reel_observations(source_url,observation_id,evidence_kind,locator,verbatim)
-                    values(%s,%s,%s,%s,%s) on conflict(source_url,observation_id) do nothing''',
-                    (canonical,ev['id'],ev['kind'],ev['locator'],ev['verbatim']))
-            for r in resources:
-                cur.execute('''insert into reelbrain_research.reel_resources(source_url,canonical_resource_url,resource_name,claimed_purpose,observation_id)
+            # Batch inserts avoid one WAN roundtrip for each observation.
+            cur.executemany('''insert into reelbrain_research.reel_observations(source_url,observation_id,evidence_kind,locator,verbatim)
+                values(%s,%s,%s,%s,%s) on conflict(source_url,observation_id) do nothing''',
+                [(canonical,ev['id'],ev['kind'],ev['locator'],ev['verbatim']) for ev in observations])
+            if resources:
+                cur.executemany('''insert into reelbrain_research.reel_resources(source_url,canonical_resource_url,resource_name,claimed_purpose,observation_id)
                    values(%s,%s,%s,%s,%s) on conflict do nothing''',
-                   (canonical,r['canonical_url'],r['name'],r['purpose'],r['evidence_id']))
+                   [(canonical,r['canonical_url'],r['name'],r['purpose'],r['evidence_id']) for r in resources])
             # Project each real observation into the searchable evidence row without
             # changing the independently researched public metadata/caption.
             # Keep inference separate: a VLM's assertion is NOT verified video proof.
