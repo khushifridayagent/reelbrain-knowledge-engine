@@ -72,6 +72,16 @@ class MetaDiscoveryTests(unittest.TestCase):
         del imgs[4]['media_url']
         with self.assertRaises(MetaMediaUnavailable):client.find('https://www.instagram.com/p/DgGHCjZIZtW/','somecreator')
 
+    def test_carousel_requires_multiple_distinct_children(self):
+        from reelbrain.meta_business_media import MetaBusinessDiscovery,MetaMediaUnavailable
+        child={'id':'A','media_type':'IMAGE','media_url':'https://scontent.cdninstagram.com/a.jpg'}
+        for children in ([child],[child,child]):
+            payload={'business_discovery':{'username':'somecreator','media':{'data':[{
+              'permalink':'https://www.instagram.com/p/DgGHCjZIZtW/',
+              'media_type':'CAROUSEL_ALBUM','children':{'data':children}}]}}}
+            with self.assertRaises(MetaMediaUnavailable):
+                MetaBusinessDiscovery('fixture','17841400001234567',http=FakeClient(payload)).find('https://instagram.com/p/DgGHCjZIZtW/','somecreator')
+
     def test_reject_non_https_or_untrusted_cdn(self):
         from reelbrain.meta_business_media import valid_meta_media_url
         for url in ('http://scontent.cdninstagram.com/a.mp4',
