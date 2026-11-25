@@ -107,3 +107,17 @@ export function buildReceiptRecheck(history,maxReview=2){
   }
  };
 }
+
+/** Only missing or invalid credentials may use the independently tested system user.
+ * A mismatched Page or permission failure is never bypassed. No credential is logged.
+ */
+export async function resolvePageSessionWithFallback(graph,primary,tested,professional){
+ if(primary){
+  try{return {...await resolvePageSession(graph,primary,professional),credential_source:'configured'};}
+  catch(e){
+   if(!tested || tested===primary || !/^(?:identity_page|identity_accounts)_graph_http_\d+_code_190(?:_sub_\d+)?$/.test(String(e?.message||'')))throw e;
+  }
+ }
+ if(!tested)throw new Error('meta_token_not_configured');
+ return {...await resolvePageSession(graph,tested,professional),credential_source:'tested_system_user'};
+}

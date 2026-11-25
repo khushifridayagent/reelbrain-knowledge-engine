@@ -3,11 +3,12 @@
  * sender conversations; persists no raw private message texts or access tokens.
  * Can still report needs_review if Graph omits Reel attachments.
  */
-import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSession, listApprovedConversations, buildReceiptRecheck } from './core.mjs';
+import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSessionWithFallback, listApprovedConversations, buildReceiptRecheck } from './core.mjs';
 const env=(k:string)=>Deno.env.get(k)?.trim()||'';
 const base=env('SUPABASE_URL').replace(/\/$/,'');
 const role=env('SUPABASE_SERVICE_ROLE_KEY');
 const token=env('META_INSTAGRAM_ACCESS_TOKEN');
+const testedToken=env('REELBRAIN_META_SYSTEM_USER_TEST_TOKEN');
 const professional=env('META_IG_PROFESSIONAL_ID');
 const json=(d:unknown,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
 const headers=()=>({'apikey':role,'authorization':'Bearer '+role,'content-type':'application/json'});
@@ -41,7 +42,7 @@ Deno.serve(async req=>{
  try{authorized=await db('rpc/reelbrain_claim_media_tick',{method:'POST',body:JSON.stringify({hash_arg:await digest(nonce)})})===true;}
  catch{return json({error:'authorization_failed'},503)}
  if(!authorized)return json({error:'unauthorized_or_expired'},403);
- if(!token || !/^[0-9]{3,32}$/.test(professional))return json({error:'meta_connection_not_configured'},503);
+ if((!token&&!testedToken) || !/^[0-9]{3,32}$/.test(professional))return json({error:'meta_connection_not_configured'},503);
  let examined=0,recorded=0,newReceipts=0,linkedReels=0,errors=0;
  let senders:any[];
  try{senders=await db('reelbrain_sender_candidates?select=sender_id,username&approved=eq.true&limit=10');}
@@ -55,10 +56,10 @@ Deno.serve(async req=>{
    try{
      const history=await db('reelbrain_dm_receipts?select=message_id,status&sender_igsid=eq.'+sender+'&order=first_received_at.desc&limit=500');
      const recheck=buildReceiptRecheck(history,2);
-     const session=await resolvePageSession(graph,token,professional);
+     const session=await resolvePageSessionWithFallback(graph,token,testedToken,professional);
      const conv=await listApprovedConversations(graph,session,sender);
      const threads=Array.isArray(conv.data)?conv.data.slice(0,15):[];
-     console.info('reelbrain_dm_auth_mode',session.mode);
+     console.info('reelbrain_dm_auth_mode',session.mode,session.credential_source);
      const events:any[]=[];
      for(const thread of threads){
        if(!ident(String(thread.id||'')) || events.length>=8)continue;
