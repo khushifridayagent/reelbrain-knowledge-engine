@@ -125,3 +125,30 @@ class NativeHybridTests(unittest.TestCase):
         with self.assertRaises(QwenPartialVisualError) as e:
             HybridVision(Progress(),Never()).analyze(Path('sample.mp4'))
         self.assertEqual(e.exception.partial_observations[0].text,'done')
+
+    def test_native_progress_retries_in_15_minutes_without_quota_reset(self):
+        from reelbrain.resumable_media import retry_seconds
+        self.assertEqual(retry_seconds({'ocr':'NativeInspectionPending: native OCR incomplete; resume saved chunks'}),900)
+        self.assertEqual(retry_seconds({'vlm':'visual coverage pending: resume checkpointed batches'}),900)
+
+    def test_hybrid_rate_limit_does_not_assume_cloudflare_midnight(self):
+        from reelbrain.model_quota_retry import model_quota_retry_seconds
+        from datetime import datetime,timezone
+        self.assertEqual(model_quota_retry_seconds({'vlm':'hybrid provider rate limit; retry later'},now=datetime(2026,11,25,10,tzinfo=timezone.utc)),900)
+
+    def test_native_url_disagreement_is_retained_but_not_promoted(self):
+        from reelbrain.native_hybrid import reconcile_ocr_reads
+        from reelbrain.contracts import candidate_urls,evidence_filter
+        readings=reconcile_ocr_reads(['https://example.org/rb1','https://example.org/rbl','https://example.org/rb1'],[])
+        self.assertTrue(any(e.kind=='ocr' and 'rb1' in e.text for e in readings))
+        self.assertTrue(any(e.kind=='ocr_uncertain' and 'rbl' in e.text for e in readings))
+        candidates=[c for e in readings for c in candidate_urls(e.text)]
+        outcome=evidence_filter(candidates,readings)
+        self.assertEqual({x.url for x in outcome.accepted},{'https://example.org/rb1'})
+
+    def test_silent_video_can_complete_without_fabricated_asr(self):
+        from reelbrain.media_evidence_summary import build_media_summary
+        r={'media_processed':True,'status':'evidence_saved','stage_observations':{'ocr':1,'vlm':1},'stage_errors':{},'audio_required':False,'unattempted_modalities':['asr']}
+        observations=[{'kind':'ocr','verbatim':'test','locator':'frame:0'}]
+        self.assertEqual(build_media_summary(observations,r)['processing_stage'],'completed')
+        self.assertFalse(build_media_summary(observations,r)['audio_transcribed'])
