@@ -1,4 +1,5 @@
 """Real Reel and 20-page carousel ingestion contract; deterministic, no network."""
+import json
 import subprocess
 import tempfile
 import unittest
@@ -21,11 +22,38 @@ class PublicBundleTests(unittest.TestCase):
                 (base / 'slide_1.jpg').write_bytes(b'\xff\xd8\xff' + b'A' * 100)
                 (base / 'slide_2.png').write_bytes(b'\x89PNG\r\n\x1a\n' + b'B' * 100)
                 (base / 'slide_10.webp').write_bytes(b'RIFF' + b'\x00'*4 + b'WEBP' + b'C'*100)
+                for index,name in enumerate(('slide_1.jpg','slide_2.png','slide_10.webp'),1):
+                    (base/(name+'.json')).write_text(json.dumps({'post_shortcode':'EXAMPLE1','count':3,'num':index,'typename':'GraphSidecar'}))
                 return subprocess.CompletedProcess(argv, 0, '', '')
             bundle = acquire_public_bundle('https://www.instagram.com/p/EXAMPLE1/?utm_source=x',
                                            Path(td), gallery_runner=fake_gallery)
             self.assertEqual([p.name for p in bundle.paths], ['slide_1.jpg', 'slide_2.png', 'slide_10.webp'])
             self.assertEqual(bundle.provider, 'gallery-dl-public')
+
+    def test_carousel_cover_only_or_unverified_manifest_is_rejected(self):
+        from reelbrain.public_bundle import acquire_public_bundle,PublicBundleError
+        for count,num,typename in ((5,1,'GraphSidecar'),(1,1,'GraphSidecar'),(None,1,'GraphImage')):
+            with self.subTest(count=count,typename=typename),tempfile.TemporaryDirectory() as td:
+                def gallery(argv,**kwargs):
+                    base=Path(argv[argv.index('-D')+1])
+                    (base/'cover.jpg').write_bytes(b'\xff\xd8\xff'+b'X'*100)
+                    (base/'cover.jpg.json').write_text(json.dumps({'post_shortcode':'EXAMPLE1','count':count,'num':num,'typename':typename}))
+                    return subprocess.CompletedProcess(argv,0,'','')
+                with self.assertRaises(PublicBundleError):
+                    acquire_public_bundle('https://instagram.com/p/EXAMPLE1/',Path(td),gallery_runner=gallery)
+
+    def test_single_image_post_with_verified_manifest_is_allowed(self):
+        from reelbrain.public_bundle import acquire_public_bundle
+        with tempfile.TemporaryDirectory() as td:
+            def gallery(argv,**kwargs):
+                self.assertIn('--write-metadata',argv)
+                base=Path(argv[argv.index('-D')+1])
+                (base/'image.jpg').write_bytes(b'\xff\xd8\xff'+b'X'*100)
+                (base/'image.jpg.json').write_text(json.dumps({'post_shortcode':'EXAMPLE1','count':1,'num':1,'typename':'GraphImage'}))
+                return subprocess.CompletedProcess(argv,0,'','')
+            bundle=acquire_public_bundle('https://instagram.com/p/EXAMPLE1/',Path(td),gallery_runner=gallery)
+            self.assertEqual(len(bundle.paths),1)
+            self.assertFalse(list(Path(td).rglob('*.json')))
 
     def test_reel_falls_back_after_yt_dlp_failed(self):
         from reelbrain.public_bundle import acquire_public_bundle
