@@ -2,6 +2,24 @@
 
 An independent, private frontend and Agentic RAG application for an existing ReelBrain knowledge store. **No extraction code, production workflow, database tables, source rows, completed states or existing credentials were changed to build this application.**
 
+## Hosted Studio
+
+The private frontend and the FastAPI backend deploy from branch `studio/chatbot-integration-v2`. The frontend root is `studio/frontend`. The API root is `studio/backend` with ASGI entry point `index.py`.
+
+| Runtime | Configuration |
+| --- | --- |
+| Frontend | Production `STUDIO_OWNER_PASSWORD` (at least 24 characters), `STUDIO_SITE_ORIGIN`, `STUDIO_BACKEND_URL`, and the server-to-server token. `STUDIO_HOST_TOKEN` takes precedence over the original `STUDIO_BACKEND_TOKEN` in the hosted deployment. |
+| Hosted API | `STUDIO_BACKEND_TOKEN`, `STUDIO_DB_URL` for the dedicated Studio login, `STUDIO_DB_CA_CERT=supabase` for certificate and hostname verification, and `STUDIO_RETRIEVAL=postgres`. The SQL changes in `001_studio_access.sql` and `002_hosted_search.sql` are installed in the existing ReelBrain database. |
+| Model-backed Docker deployment | Install `requirements-models.txt`, provision the private index and model cache, and use the E5/BGE retrieval path. |
+| Optional provider services | Configure dedicated Studio keys in the API host. GitHub Actions uses a separate secret store for its integration smoke tests. |
+
+The hosted retrieval path searches persistent PostgreSQL observations, captions, transcript segments and resource records. Results include their original source and locator. With no provider answer, the UI displays cited saved excerpts. The Docker deployment provides local semantic embedding and reranking.
+
+Public frontend: https://reelbrain-knowledge-engine.vercel.app/  
+Backend liveness: https://reelbrain-studio-api.vercel.app/health
+
+The authenticated `/ready` endpoint checks database access. The data routes require a server-to-server bearer token. For a release smoke test, compare `/counts` with `reelbrain_studio.counts`, search a real term, open one returned source, then resubmit that same source and check that `inserted` is false. Test owner login on the production frontend separately. Preserve existing queued work and record provider errors independently of API health.
+
 ## What is implemented
 
 - Next.js responsive owner-only search workspace, results with source references, filters, counts, link submission, and contextual AI drawer. “A bit more detailed” selects the source(s) and prefills the detail question; public web verification is an explicit opt-in with a public query.
@@ -23,9 +41,9 @@ sql/001_studio_access.sql   Optional additive isolated access facade
 docker-compose.yml    Separate two-service local/private deployment
 ```
 
-## Database connection contract — deployment step, not yet applied
+## Database connection contract for a new installation
 
-The live source schema was inspected read-only: `public.reelbrain_dm_jobs`, `public.reelbrain_reel_knowledge`, `reelbrain_research.reel_observations`, `reelbrain_research.reel_resources`, `reelbrain_research.reel_sources`. The new SQL facade creates only a new `reelbrain_studio` schema and dedicated `reelbrain_studio_app` login with four narrow SECURITY DEFINER functions, explicit grants and a fixed search path. It does not change table definitions or RLS policies. Existing source tables have RLS and no PUBLIC table grants at audit time. The facade has not been applied, and role grants and runtime RLS behavior need a deployment-time audit. Do not use the existing worker's administrative DB credential.
+The live source schema was inspected read-only: `public.reelbrain_dm_jobs`, `public.reelbrain_reel_knowledge`, `reelbrain_research.reel_observations`, `reelbrain_research.reel_resources`, `reelbrain_research.reel_sources`. The new SQL facade creates only a new `reelbrain_studio` schema and dedicated `reelbrain_studio_app` login with four narrow SECURITY DEFINER functions, explicit grants and a fixed search path. It does not change table definitions or RLS policies. Existing source tables have RLS and no PUBLIC table grants at audit time. For a new installation verify all role grants before connecting a runtime. Do not use the existing worker's administrative DB credential.
 
 1. Review `sql/001_studio_access.sql` and execute against the existing ReelBrain project as an authorized admin only when deploying the Studio. Confirm the new role did not previously exist with unintended grants. Check all inherited PUBLIC functions/privileges, and verify that anonymous/authenticated roles cannot invoke the new RPCs. Test with a dedicated login and a rollback-only fixture before any live submission.
 2. Set a strong password for the dedicated role via an authorized secure PostgreSQL console (`\password reelbrain_studio_app` in psql). Keep it out of source, chat and shell history. Get the direct or pooler connection details from Supabase project settings; set `STUDIO_DB_URL` using only the dedicated role. For the pooler the role username includes the project suffix. Obtain the official project CA certificate; configure `STUDIO_DB_CA_CERT`. Runtime enforces TLS `verify-full` and expected project/role.
@@ -55,7 +73,7 @@ Official references:
 - https://api-dashboard.search.brave.com/documentation/pricing
 - https://supabase.com/docs/guides/database/connecting-to-postgres
 
-## Validation status (2026-11-25)
+## Original pre-deployment validation (historical)
 
 - Local backend: 13 passing tests covering deterministic fixture hybrid retrieval, exact URL validation, context isolation, API authentication, counts/submit contract, citation validation, GitHub response parsing, private repo exclusion and SSRF guard. Python syntax compiled.
 - Frontend: 2 passing Node tests covering owner authentication and same-origin request validation. Actual Next.js build not run: environment could not resolve npm registry (`EAI_AGAIN`). CI is included to perform full build when remote repo is available.
@@ -67,7 +85,7 @@ Official references:
 
 ```
 cd backend
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-models.txt
 python -m unittest discover -s tests -v
 cd ../frontend
 npm install
