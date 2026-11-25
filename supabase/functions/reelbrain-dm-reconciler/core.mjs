@@ -129,23 +129,30 @@ export function selectReviewPage(history,cursor=0,limit=4){
  const selected=next.length?next:rows.slice(0,limit);
  return {rows:selected,cursor:selected.length?Number(selected.at(-1).id):0};
 }
-/** Official Graph only. Native media IDs are never converted to guessed shortcodes. */
-export async function recoverApprovedMessage(graph,credential,mid,sender,professional){
- if(!validGraphId(mid)||String(sender)===String(professional))return null;
+/** Request explicit share subfields on the first read, while Meta still exposes the message. */
+export async function readGraphMessage(graph,credential,mid){
  const path=encodeURIComponent(mid);
  let item;
- try{item=await graph(path,{fields:'id,from,created_time,message,attachments,shares'},credential,4000);}
+ try{item=await graph(path,{fields:'id,from,created_time,message,attachments,shares{type,url,id}'},credential,4000);}
  catch(e){
   if(!unsupportedField(e))throw e;
   try{item=await graph(path,{fields:'id,from,created_time,message,attachments'},credential,4000);}
   catch(e2){if(!unsupportedField(e2))throw e2;item=await graph(path,{fields:'id,from,created_time,message'},credential,4000);}
  }
+ return item;
+}
+
+/** Official Graph only. Native media IDs are never converted to guessed shortcodes. */
+export async function recoverApprovedMessage(graph,credential,mid,sender,professional){
+ if(!validGraphId(mid)||String(sender)===String(professional))return null;
+ const path=encodeURIComponent(mid);
+ const item=await readGraphMessage(graph,credential,mid);
  if(item?.id!==mid||String(item?.from?.id)!==String(sender))return null;
  let event=reelEventsFromGraph([item],sender,professional)[0];
  if(!event||event.urls.length)return event||null;
- if(!item.shares){
+ if(!item.shares || (Array.isArray(item.shares.data) && !item.shares.data.length)){
   try{
-   const shares=await graph(path+'/shares',{},credential,3000);
+   const shares=await graph(path+'/shares',{fields:'type,url,id'},credential,3000);
    event=reelEventsFromGraph([{...item,shares}],sender,professional)[0]||event;
   }catch{/* No URL is a review, not a successful recovery. */}
  }

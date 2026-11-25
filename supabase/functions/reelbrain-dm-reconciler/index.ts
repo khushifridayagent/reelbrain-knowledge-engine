@@ -3,7 +3,7 @@
  * sender conversations; persists no raw private message texts or access tokens.
  * Can still report needs_review if Graph omits Reel attachments.
  */
-import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSessionWithFallback, listApprovedConversations, buildReceiptRecheck, selectReviewPage, recoverApprovedMessage } from './core.mjs';
+import { inspectParticipantIds, reelEventsFromGraph, graphErrorCategory, validGraphId, resolvePageSessionWithFallback, listApprovedConversations, buildReceiptRecheck, selectReviewPage, recoverApprovedMessage, readGraphMessage } from './core.mjs';
 const env=(k:string)=>Deno.env.get(k)?.trim()||'';
 const base=env('SUPABASE_URL').replace(/\/$/,'');
 const role=env('SUPABASE_SERVICE_ROLE_KEY');
@@ -95,9 +95,7 @@ Deno.serve(async req=>{
        for(const item of items){
          if(events.length>=8)break;
          const mid=String(item?.id||'');if(!ident(mid)||!datesAreRecent(item?.created_time)||!recheck.take(mid))continue;
-         let detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments,shares'},session.token).catch(()=>null);
-         if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message,attachments'},session.token).catch(()=>null);}
-         if(!detail){detail=await graph(encodeURIComponent(mid),{fields:'id,from,created_time,message'},session.token).catch(()=>null);}
+         const detail=await readGraphMessage(graph,session.token,mid).catch(()=>null);
          if(!detail) {unavailable=true;reason='graph_message_detail_unavailable';continue;}
          if(!datesAreRecent(detail.created_time)||String(detail.from?.id)!==sender)continue;
          // No private message string persists; only canonical URL, attachment type, Meta mid.
