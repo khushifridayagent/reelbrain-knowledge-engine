@@ -248,7 +248,9 @@ def renewable_lease(config,job_id,token):
         thread.join(timeout=10)
 
 
-def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[dict]:
+def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None,*,target_job_id:int|None=None)->list[dict]:
+    if target_job_id is not None and (type(target_job_id) is not int or target_job_id<1 or batch_size!=1):
+        raise ValueError('targeted acceptance requires one valid job ID')
     config=config or checked_config()
     with pg_open(config['db_url']) as pg:
         with pg.cursor() as cur:
@@ -264,7 +266,16 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                 set status='queued',attempts=least(attempts,greatest(0,max_attempts-1)),
                     lease_token=null,lease_until=null,available_at=now(),updated_at=now()
                 where """+RECOVERABLE_TERMINAL_SQL)
-            cur.execute('select id,source_url,lease_token from public.reelbrain_claim_dm_jobs(%s,%s)',(min(10,max(1,batch_size)),900))
+            if target_job_id is None:
+                cur.execute('select id,source_url,lease_token from public.reelbrain_claim_dm_jobs(%s,%s)',(min(10,max(1,batch_size)),900))
+            else:
+                # One-off acceptance uses exactly the same lease and completion path.
+                cur.execute("""with selected as (select id from public.reelbrain_dm_jobs
+                    where id=%s and status='queued' and available_at<=now() and attempts<max_attempts
+                    for update skip locked)
+                    update public.reelbrain_dm_jobs j set status='leased',lease_token=gen_random_uuid(),
+                    lease_until=now()+interval '900 seconds',attempts=j.attempts+1,updated_at=now()
+                    from selected where j.id=selected.id returning j.id,j.source_url,j.lease_token""",(target_job_id,))
             claimed=cur.fetchall()
         pg.commit()
         done=[]
