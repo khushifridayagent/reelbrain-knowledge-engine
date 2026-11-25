@@ -36,7 +36,10 @@ class Services:
             u=urlsplit(dsn);host=u.hostname or '';user=u.username or ''
             if not (host=='db.xlkdzrhzizuftbnitodr.supabase.co' or (host.endswith('.pooler.supabase.com') and user in ('reelbrain_studio_app.xlkdzrhzizuftbnitodr','reelbrain_studio_host.xlkdzrhzizuftbnitodr'))):raise RuntimeError('Wrong database project.')
             if user not in ('reelbrain_studio_app','reelbrain_studio_app.xlkdzrhzizuftbnitodr','reelbrain_studio_host','reelbrain_studio_host.xlkdzrhzizuftbnitodr'):raise RuntimeError('Dedicated Studio credential required; never use postgres/service_role.')
-            self.db=Database(dsn,ca_cert=os.getenv('STUDIO_DB_CA_CERT',''))
+            ca = os.getenv('STUDIO_DB_CA_CERT', '')
+            if ca == 'supabase':
+                ca = str(Path(__file__).resolve().parents[1] / 'certs' / 'supabase-root-2021.pem')
+            self.db = Database(dsn, ca_cert=ca)
         if self.index is None and os.getenv('STUDIO_RETRIEVAL') == 'postgres':
             from .hosted import HostedIndex
             self.index = HostedIndex(self.db)
@@ -67,6 +70,35 @@ def create_app(services=None):
         except Exception:raise HTTPException(503,'Private index unavailable. Check Studio credentials and model runtime.') from None
     @app.get('/health')
     def health():return {'status':'ok'}
+    @app.get('/ready',dependencies=[Depends(authorize)])
+    def readiness():
+        try:
+            with s.lock:
+                s.open()
+                s.db.stats({})
+            return {'status': 'ready'}
+        except Exception as exc:
+            # Report only fixed operational categories. Driver messages can contain DSNs.
+            message = str(exc).lower()
+            signatures = {
+                'certificate verify failed': 'tls_verification',
+                'root certificate': 'tls_root',
+                'tenant or user not found': 'pooler_tenant',
+                'password authentication failed': 'database_auth',
+                'network is unreachable': 'network_unreachable',
+                'timeout': 'database_timeout',
+                'could not translate host name': 'dns',
+                'could not resolve': 'dns',
+                'permission denied': 'database_grant',
+                'does not exist': 'schema',
+                'no module named': 'dependency',
+                'wrong database project': 'project_binding',
+                'not configured': 'configuration',
+                'unsupported startup parameter': 'pooler_parameter',
+            }
+            category = next((v for k,v in signatures.items() if k in message), 'database_unavailable')
+            raise HTTPException(503,category) from None
+
     @app.post('/search',dependencies=[Depends(authorize)])
     def search(body:SearchBody):
         try:f=filter_args(body.filters)

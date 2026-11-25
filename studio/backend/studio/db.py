@@ -37,8 +37,9 @@ class Database:
     def _call(self,sql,params=(),write=False):
         import psycopg
         from psycopg.rows import dict_row
-        with psycopg.connect(self.dsn,connect_timeout=8,row_factory=dict_row,sslmode='verify-full',sslrootcert=self.ca_cert,options='-c statement_timeout=15000') as conn:
+        with psycopg.connect(self.dsn,connect_timeout=8,row_factory=dict_row,sslmode='verify-full',sslrootcert=self.ca_cert,prepare_threshold=None) as conn:
             if not write:conn.execute('set transaction read only')
+            conn.execute("set local statement_timeout='15s'")
             return conn.execute(sql,params).fetchall()
     def versions(self,after=''):
         return self._call('select * from reelbrain_studio.sources(%s,%s)',(after,100))
