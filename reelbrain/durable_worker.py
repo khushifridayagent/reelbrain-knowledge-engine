@@ -113,7 +113,8 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                         os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
                         'https://api.groq.com'))
                 if native_enabled:
-                    from .native_hybrid import NativeOCR, GeminiInlineVision, HybridVision, SpeechFallback
+                    from .native_hybrid import GeminiInlineVision, HybridVision, SpeechFallback
+                    from .knowledge_focus import FocusedOCR
                     from .qwen_vl import QwenVLResearcher
                     from .local_asr import FasterWhisperSpeechToText
                     providers=[]
@@ -131,7 +132,7 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                     if not hosted_audio and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
                         offline=FasterWhisperSpeechToText(os.getenv('REELBRAIN_LOCAL_ASR_MODEL','small'))
                         asr=SpeechFallback(asr,offline) if asr is not None else offline
-                    return LocalPipelineEngine(store,audio_model=asr,video_model=vlm,native_ocr=NativeOCR())
+                    return LocalPipelineEngine(store,audio_model=asr,video_model=vlm,native_ocr=FocusedOCR())
                 if cf_vision:
                     from .qwen_vl import QwenVLResearcher
                     vlm=QwenVLResearcher(
@@ -271,7 +272,10 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None)->list[d
                 else:
                     with renewable_lease(config,job_id,token) as lost:
                         r=process_url(url,pg,apify_token=config['apify_token'],acquisition=config.get('acquisition','apify'),lease=(job_id,token))
-                        if lost.is_set():raise RuntimeError('worker lease renewal lost')
+                        # Persistence was already lease-fenced and committed. A heartbeat
+                        # can time out behind its row lock; only the atomic queue RPC
+                        # below decides whether the lease still belongs to this worker.
+                        if lost.is_set():print('LEASE_HEARTBEAT_WARN finalization will verify ownership',flush=True)
                 if not r.get('persisted_in_postgres'):raise RuntimeError('remote evidence persistence not confirmed')
                 quota_retry=r.get('transient_model_retry_seconds')
                 if r.get('status') not in ('partial','evidence_saved'):

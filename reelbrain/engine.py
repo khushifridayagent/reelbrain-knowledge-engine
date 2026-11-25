@@ -167,7 +167,7 @@ class LocalPipelineEngine:
             try:return func(),int((time.monotonic()-start)*1000)
             except Exception:raise
         def stage_unit(label):
-            if label=='ocr' and self.native_ocr is not None:return 'native-hybrid-v1:full-ocr'
+            if label=='ocr' and self.native_ocr is not None:return getattr(self.native_ocr,'checkpoint_version','native-hybrid-v1')+':full-ocr'
             if label=='vlm' and getattr(self.video_model,'supports_checkpoint',False) is True:return 'native-hybrid-v1:full-vlm'
             return None
         if checkpoint:
