@@ -250,7 +250,8 @@ class NativeHybridTests(unittest.TestCase):
         class Decoded:
             time_base=Fraction(1,60)
             def __init__(self,i):self.pts=i
-            def to_ndarray(self,format):return pixels
+            def to_ndarray(self,format):
+                a=pixels.copy();a[0,0]=[self.pts%256,self.pts//256,0];return a
         video=SimpleNamespace(frames=520)
         container=SimpleNamespace(streams=SimpleNamespace(video=[video]),decode=lambda _: (Decoded(i) for i in range(520)))
         with patch('av.open',return_value=nullcontext(container)),patch('reelbrain.knowledge_focus.focused_candidates',side_effect=lambda frames:iter(frames)),patch('reelbrain.knowledge_focus.focused_read',return_value=[Observation('visible technical instruction',kind='ocr')]) as ocr:
@@ -261,3 +262,24 @@ class NativeHybridTests(unittest.TestCase):
             self.assertEqual(len(result),1)
             FocusedOCR().analyze(Path('fixture.mp4'),checkpoint=cache,asset_index=1)
             self.assertEqual(ocr.call_count,520)
+
+    def test_exact_duplicate_frames_do_not_repeat_ocr_and_code_indentation_survives(self):
+        from reelbrain.knowledge_focus import FocusedOCR,unique_knowledge
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from contextlib import nullcontext
+        from fractions import Fraction
+        a=np.zeros((8,8,3),np.uint8);b=a.copy();b[0,0]=[0,0,1]
+        class Decoded:
+            time_base=Fraction(1,60)
+            def __init__(self,i):self.pts=i
+            def to_ndarray(self,format):return b if self.pts==9 else a
+        v=SimpleNamespace(frames=24)
+        c=SimpleNamespace(streams=SimpleNamespace(video=[v]),decode=lambda _: (Decoded(i) for i in range(24)))
+        def recognize(pixels):
+            return [Observation('if ready:\n    run()' if np.array_equal(pixels,a) else 'if ready:\nrun()',kind='ocr')]
+        with patch('av.open',return_value=nullcontext(c)),patch('reelbrain.knowledge_focus.focused_candidates',side_effect=lambda f:iter(f)),patch('reelbrain.knowledge_focus.focused_read',side_effect=recognize) as reader:
+            rows=FocusedOCR().analyze(Path('fixture.mp4'),checkpoint=Cache(),asset_index=1)
+            self.assertEqual(reader.call_count,2)
+            self.assertEqual(len(rows),2)
+            self.assertTrue(any(x.locator.startswith('frame:9@') for x in rows))
