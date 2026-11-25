@@ -1,5 +1,5 @@
 """One-off synthetic integration checks. Never print payloads, tokens or private rows."""
-import os, json, time, urllib.request, urllib.error, base64
+import os, json, re, time, urllib.request, urllib.error, base64
 from urllib.parse import urlencode, urlsplit
 from concurrent.futures import ThreadPoolExecutor
 def request(name,url,key=None,body=None,header='X-API-Key'):
@@ -56,6 +56,8 @@ def database():
         con.execute('set transaction read only')
         assert con.execute('select count(*) from public.reelbrain_reel_knowledge').fetchone()[0]>=0
         con.rollback()
+    if re.fullmatch(r'aws-[0-9]+-ap-south-1[.]pooler[.]supabase[.]com', u.hostname or ''):
+        print('verified_pooler_host='+u.hostname,flush=True)
     print('database_read_only_pass',flush=True)
 if __name__=='__main__':
     failed=[]

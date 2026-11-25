@@ -2,7 +2,7 @@ name: Studio isolated live integration smoke
 on:
   push:
     branches: ['studio/chatbot-integration-v2']
-    paths: ['.github/workflows/studio-integration-smoke.yml']
+    paths: ['.github/workflows/studio-integration-smoke.yml', 'studio/verify_integrations.py']
 permissions:
   contents: read
 jobs:
