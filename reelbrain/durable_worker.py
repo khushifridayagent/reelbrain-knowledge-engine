@@ -97,6 +97,9 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                 generic_external_allowed=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
                 from .cloudflare_vision_config import cloudflare_qwen_config
                 cf_vision=cloudflare_qwen_config()
+                native_enabled=(acquisition=='yt_dlp_public' and lease is not None and flag('REELBRAIN_NATIVE_HYBRID_ENABLED'))
+                if native_enabled and not (generic_external_allowed and flag('REELBRAIN_HYBRID_FREE_PROVIDERS_CONFIRMED')):
+                    raise RuntimeError('Native hybrid requires explicit upload and free-provider approval')
                 # Provider-specific Cloudflare vision opt-in must NOT silently
                 # activate unrelated Groq paid ASR or Gemini model uploads.
                 if not hosted_audio and generic_external_allowed and os.getenv('GROQ_API_KEY'):
@@ -126,6 +129,22 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                     from .local_asr import FasterWhisperSpeechToText
                     asr=FasterWhisperSpeechToText(
                         os.getenv('REELBRAIN_LOCAL_ASR_MODEL','small'))
+                if native_enabled:
+                    from .native_hybrid import NativeOCR, GeminiInlineVision, HybridVision, SpeechFallback
+                    from .qwen_vl import QwenVLResearcher
+                    from .local_asr import FasterWhisperSpeechToText
+                    providers=[]
+                    if os.getenv('GEMINI_API_KEY'):
+                        providers.append(GeminiInlineVision(os.environ['GEMINI_API_KEY']))
+                    if os.getenv('GROQ_API_KEY'):
+                        providers.append(QwenVLResearcher('https://api.groq.com/openai/v1',model='qwen/qwen3.8-27b',api_key=os.environ['GROQ_API_KEY'],max_frames=1,max_batches=8))
+                    if cf_vision:
+                        providers.append(QwenVLResearcher(cf_vision['base_url'],model=cf_vision['model'],api_key=cf_vision['api_key'],max_frames=4,max_batches=8))
+                    if not providers:raise RuntimeError('No explicitly authorized hybrid vision provider configured')
+                    vlm=HybridVision(*providers)
+                    if not hosted_audio and flag('REELBRAIN_ENABLE_LOCAL_ASR') and isinstance(asr,GroqSpeechToText):
+                        asr=SpeechFallback(asr,FasterWhisperSpeechToText(os.getenv('REELBRAIN_LOCAL_ASR_MODEL','small')))
+                    return LocalPipelineEngine(store,audio_model=asr,video_model=vlm,native_ocr=NativeOCR())
                 return LocalPipelineEngine(store,audio_model=asr,video_model=vlm)
             if acquisition=='yt_dlp_public':
                 # Public-only: yt-dlp then gallery-dl fallback, or full photo
