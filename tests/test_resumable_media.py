@@ -133,3 +133,17 @@ class ResumableMediaTests(unittest.TestCase):
         from reelbrain import durable_worker
         import inspect
         self.assertIn('RECOVERABLE_TERMINAL_SQL',inspect.getsource(durable_worker.run_one_batch))
+
+    def test_progress_classification_is_not_model_quota(self):
+        from reelbrain.resumable_media import classify_partial
+        self.assertEqual(classify_partial({'ocr':'NativeInspectionPending: focused coverage pending: time budget'}),'deferred_progress')
+        self.assertEqual(classify_partial({'ocr':'NativeInspectionPending: native OCR incomplete; resume saved chunks'}),'deferred_incomplete')
+        self.assertEqual(classify_partial({'vlm':'QwenPartialVisualError: hybrid provider cooldown:900'}),'deferred_model_quota')
+        self.assertEqual(classify_partial({'vlm':'service unavailable'}),'deferred_incomplete')
+        self.assertEqual(classify_partial({'ocr':'focused coverage pending: time budget','vlm':'quota exceeded'}),'deferred_model_quota')
+    def test_progress_resume_does_not_block_other_stages_or_claim_completion(self):
+        from reelbrain.resumable_media import drain_overlapping
+        result=drain_overlapping({},max_jobs=1,process_batch=lambda config,batch_size:[{'status':'deferred_progress','acknowledged_failure':True}],time_remaining=lambda:10000)
+        self.assertEqual(result[0]['status'],'deferred_progress')
+        with self.assertRaises(RuntimeError):
+            drain_overlapping({},max_jobs=1,process_batch=lambda config,batch_size:[{'status':'deferred_progress','acknowledged_failure':False}],time_remaining=lambda:10000)
