@@ -255,3 +255,13 @@ class SpeechFallback:
             except Exception:
                 pass
         raise RuntimeError('speech extraction unavailable')
+
+def has_audio_stream(path):
+    """Only a successfully probed video with no audio streams can skip ASR."""
+    try:
+        import av
+        with av.open(str(path)) as container:
+            if not container.streams.video:return True
+            return bool(container.streams.audio)
+    except Exception:
+        return True
