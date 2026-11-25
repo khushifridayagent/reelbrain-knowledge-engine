@@ -119,6 +119,36 @@ class CarouselEngineTests(unittest.TestCase):
                 self.assertEqual(output['resource_count'],2)
             finally:store.close()
 
+    def test_ten_page_post_preserves_last_page_links_and_coverage(self):
+        from reelbrain.engine import LocalPipelineEngine
+        from reelbrain.media_evidence_summary import build_media_summary
+        class Vision:
+            def analyze(self,path):
+                return [Observation('Technical workflow '+path.stem,kind='model_inference',locator='image:1')]
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            files=[root/f'page_{n:02d}.jpg' for n in range(1,11)]
+            for p in files:p.write_bytes(b'fixture')
+            store=KnowledgeStore(root/'evidence.sqlite')
+            try:
+                result=LocalPipelineEngine(store,ocr=lambda p:[Observation('https://github.com/example/'+p.stem,kind='ocr',locator='image:1')],video_model=Vision()).ingest(files,'https://instagram.com/p/EXAMPLE1/',allow_external=True)
+                self.assertEqual(result['asset_count'],10)
+                self.assertEqual(result['stage_observations']['vlm'],10)
+                self.assertEqual(result['resource_count'],10)
+                rows=[dict(r) for r in store.con.execute('select kind,locator,verbatim from evidence').fetchall()]
+                self.assertTrue(any(r['locator'].startswith('slide:10/') and 'page_10' in r['verbatim'] for r in rows))
+                summary=build_media_summary(rows,{**result,'media_processed':True})
+                self.assertEqual(summary['processing_stage'],'completed')
+                self.assertEqual(summary['content']['asset_count'],10)
+                self.assertEqual(summary['content']['completed_asset_count'],10)
+            finally:store.close()
+
+    def test_post_never_reuses_a_single_hosted_video_transcript(self):
+        from reelbrain.durable_worker import reusable_hosted_audio
+        class PG:
+            def cursor(self):raise AssertionError('Post must use its own per-slide audio')
+        self.assertIsNone(reusable_hosted_audio(PG(),'https://instagram.com/p/EXAMPLE1/'))
+
     def test_asset_count_over_twenty_fails_before_extraction(self):
         from reelbrain.engine import LocalPipelineEngine
         with tempfile.TemporaryDirectory() as td:
