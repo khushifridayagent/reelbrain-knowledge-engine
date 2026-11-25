@@ -88,6 +88,8 @@ class FocusedOCR:
         path=Path(path);retained=[];screened=0;selected=0;new=0
         # Cache only text for exact original-color pixel identities; never retain images.
         exact_reads={}
+        if checkpoint is not None and callable(getattr(checkpoint,'prefetch',None)):
+            checkpoint.prefetch('ocr')
         def inspect(stream,expected):
             nonlocal screened,selected,new
             def counted():
