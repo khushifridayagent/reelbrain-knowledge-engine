@@ -17,7 +17,7 @@ def unique_knowledge(rows):
     seen=set();out=[]
     for x in rows:
         if x.kind not in ('ocr','ocr_uncertain') or not x.text.strip():continue
-        key=(x.kind,' '.join(x.text.split()))
+        key=(x.kind,x.text)
         if key not in seen:seen.add(key);out.append(x)
     return out
 
@@ -26,17 +26,18 @@ def focused_candidates(frames):
     import cv2
     import numpy as np
     previous=None;last_selected=None;last_time=-1e9;count=0
+    kernel=cv2.getStructuringElement(cv2.MORPH_RECT,(9,3))
+    join_kernel=cv2.getStructuringElement(cv2.MORPH_RECT,(15,3))
     for f in frames:
         if f.index!=count or not math.isfinite(f.timestamp_ms):raise RuntimeError('native frame sequence incomplete')
         count+=1
         gray=cv2.cvtColor(f.pixels,cv2.COLOR_BGR2GRAY)
         # Keep original resolution for text-like stroke detection. A compact
         # maximum-pooled fingerprint preserves small local changes.
-        kernel=cv2.getStructuringElement(cv2.MORPH_RECT,(9,3))
         dark=cv2.morphologyEx(gray,cv2.MORPH_BLACKHAT,kernel)
         light=cv2.morphologyEx(gray,cv2.MORPH_TOPHAT,kernel)
         strokes=cv2.threshold(cv2.max(dark,light),24,255,cv2.THRESH_BINARY)[1]
-        joined=cv2.morphologyEx(strokes,cv2.MORPH_CLOSE,cv2.getStructuringElement(cv2.MORPH_RECT,(15,3)))
+        joined=cv2.morphologyEx(strokes,cv2.MORPH_CLOSE,join_kernel)
         n,labels,stats,_=cv2.connectedComponentsWithStats(joined,8)
         textmask=np.zeros_like(gray)
         for x,y,w,h,area in stats[1:]:
@@ -50,8 +51,9 @@ def focused_candidates(frames):
         else:
             delta=cv2.absdiff(thumb,last_selected)
             novel=bool(np.max(delta)>=38 and np.count_nonzero(delta>=14)>=3)
-        scene=previous is None or float(np.mean(cv2.absdiff(cv2.resize(gray,(96,96)),previous)))>=24
-        previous=cv2.resize(gray,(96,96))
+        scene_thumb=cv2.resize(gray,(96,96))
+        scene=previous is None or float(np.mean(cv2.absdiff(scene_thumb,previous)))>=24
+        previous=scene_thumb
         if f.index==0 or (present and (novel or f.timestamp_ms-last_time>=1800)) or scene:
             last_selected=thumb;last_time=f.timestamp_ms
             yield f
@@ -84,6 +86,8 @@ class FocusedOCR:
         import cv2
         import av
         path=Path(path);retained=[];screened=0;selected=0;new=0
+        # Cache only text for exact original-color pixel identities; never retain images.
+        exact_reads={}
         def inspect(stream,expected):
             nonlocal screened,selected,new
             def counted():
@@ -96,17 +100,24 @@ class FocusedOCR:
                     batch=list(islice(candidates,8))
                     if not batch:break
                     selected+=len(batch)
-                    key=hashlib.sha256(json.dumps([(f.index,f.timestamp_ms,digest(f.pixels)) for f in batch]).encode()).hexdigest()
+                    keys=[digest(f.pixels) for f in batch]
+                    key=hashlib.sha256(json.dumps([(f.index,f.timestamp_ms,k) for f,k in zip(batch,keys)]).encode()).hexdigest()
                     unit=f'{VERSION}:{asset_index}:{key}'
                     cached=checkpoint.load('ocr',unit=unit) if checkpoint else None
                     if cached is not None:retained.extend(cached[0]);continue
                     if new>=self.max_new_chunks or time.monotonic()>=self.deadline:
                         raise NativeInspectionPending('focused coverage pending: resume saved chunks',unique_knowledge(retained))
                     began=time.monotonic()
-                    def one(f):
-                        return [Observation(e.text,kind=e.kind,locator=f'frame:{f.index}@{f.timestamp_ms:.3f}ms',confidence=e.confidence) for e in focused_read(f.pixels)]
+                    missing={}
+                    for f,k in zip(batch,keys):
+                        if k not in exact_reads and k not in missing:missing[k]=f
                     with ThreadPoolExecutor(max_workers=self.parallelism) as pool:
-                        rows=[e for group in pool.map(one,batch) for e in group]
+                        for k,events in zip(missing,pool.map(lambda f:focused_read(f.pixels),missing.values())):
+                            exact_reads[k]=events
+                    rows=[Observation(e.text,kind=e.kind,locator=f'frame:{f.index}@{f.timestamp_ms:.3f}ms',confidence=e.confidence)
+                          for f,k in zip(batch,keys) for e in exact_reads[k]]
+                    # Bounded text-only cache; do not evict until this batch is materialized.
+                    while len(exact_reads)>2048:exact_reads.pop(next(iter(exact_reads)))
                     rows=unique_knowledge(rows)
                     if checkpoint:checkpoint.save('ocr',rows,int((time.monotonic()-began)*1000),unit=unit)
                     retained.extend(rows);new+=1
