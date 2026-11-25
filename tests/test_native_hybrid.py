@@ -54,3 +54,54 @@ class NativeHybridTests(unittest.TestCase):
         self.assertEqual(h.analyze(Path('fixture.mp4'),checkpoint=cache,asset_index=1)[0].text,'screen')
         h.analyze(Path('fixture.mp4'),checkpoint=cache,asset_index=1)
         self.assertEqual(good.calls,1)
+
+    def test_local_whisper_fallback_on_groq_failure(self):
+        from reelbrain.native_hybrid import SpeechFallback
+        class Broken:
+            def transcribe(self,p):raise RuntimeError('quota')
+        class Local:
+            def transcribe(self,p):return [Observation('spoken',kind='asr')]
+        self.assertEqual(SpeechFallback(Broken(),Local()).transcribe(Path('fixture.wav'))[0].text,'spoken')
+
+    def test_partial_native_evidence_is_preserved_and_legacy_cache_not_reused(self):
+        from tempfile import TemporaryDirectory
+        from reelbrain.engine import LocalPipelineEngine
+        from reelbrain.store import KnowledgeStore
+        class Partial:
+            def analyze(self,path,**kw):
+                raise NativeInspectionPending('coverage pending',[Observation('new exact native text',kind='ocr',locator='frame:1@16.67ms')])
+        with TemporaryDirectory() as d:
+            p=Path(d)/'fixture.png';p.write_bytes(b'fixture')
+            cache=Cache();cache.save('ocr',[Observation('old sampled text',kind='ocr')],1)
+            db=KnowledgeStore(Path(d)/'local.db')
+            try:
+                r=LocalPipelineEngine(db,native_ocr=Partial()).ingest(p,'https://instagram.com/reel/Native123/',checkpoint=cache)
+                self.assertEqual(r['status'],'partial')
+                self.assertIn('ocr',r['stage_errors'])
+                self.assertEqual(r['stage_observations']['ocr'],1)
+                text=db.con.execute('select verbatim from evidence where source_id=?',(r['source_id'],)).fetchall()
+                self.assertEqual([x['verbatim'] for x in text],['new exact native text'])
+            finally:db.close()
+
+    def test_actual_lossless_native_single_frame_url(self):
+        from tempfile import TemporaryDirectory
+        import subprocess
+        from PIL import Image,ImageDraw,ImageFont
+        from reelbrain.native_hybrid import NativeOCR
+        with TemporaryDirectory() as d:
+            root=Path(d)
+            for index in range(4):
+                im=Image.new('RGB',(960,360),'white')
+                if index==1:
+                    draw=ImageDraw.Draw(im)
+                    font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',48)
+                    draw.text((24,130),'https://example.org/rb7',font=font,fill='black')
+                im.save(root/f'{index:03}.png')
+            path=root/'fixture.mkv'
+            subprocess.run(['ffmpeg','-v','error','-y','-framerate','60','-i',str(root/'%03d.png'),'-c:v','ffv1',str(path)],check=True,capture_output=True,timeout=15)
+            cache=Cache()
+            result=NativeOCR(max_seconds=90).analyze(path,checkpoint=cache)
+            self.assertTrue(any('https://example.org/rb7' in x.text and 'frame:1@' in x.locator for x in result))
+            import json
+            manifests=[json.loads(e.text) for events,_ in cache.data.values() for e in events if e.kind=='native_manifest']
+            self.assertEqual(sum(len(m) for m in manifests),4)
