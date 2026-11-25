@@ -96,6 +96,15 @@ def acquire_with_public_provider(url,output_directory,pg,*,cookies_file=None):
     try:
         return acquire_with_meta_fallback(url,output_directory,pg,cookies_file=cookies_file)
     except PublicMediaError:
+        # Posts only. Dedicated free-account token, never the Reel API token.
+        # Keep the existing successful free path and optional provider unchanged.
+        from .apify_post_media import KEY as POST_KEY, acquire_apify_post
+        if '/p/' in canonicalize_instagram(url) and os.getenv(POST_KEY):
+            try:
+                return acquire_apify_post(url,output_directory,os.environ[POST_KEY])
+            except PublicMediaError:
+                if not media_provider_enabled():
+                    raise
         if not media_provider_enabled():
             raise
     return acquire_scrapecreators_bundle(url,output_directory,os.environ[KEY])
