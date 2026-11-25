@@ -121,3 +121,49 @@ export async function resolvePageSessionWithFallback(graph,primary,tested,profes
  if(!tested)throw new Error('meta_token_not_configured');
  return {...await resolvePageSession(graph,tested,professional),credential_source:'tested_system_user'};
 }
+
+/** Keyset page: advance even on unavailable messages, wrap only at the end. */
+export function selectReviewPage(history,cursor=0,limit=4){
+ const rows=(Array.isArray(history)?history:[]).filter(x=>x?.status==='needs_review'&&Number.isSafeInteger(Number(x.id))&&Number(x.id)>0&&validGraphId(x.message_id)).sort((a,b)=>Number(a.id)-Number(b.id));
+ const next=rows.filter(x=>Number(x.id)>Number(cursor)).slice(0,limit);
+ const selected=next.length?next:rows.slice(0,limit);
+ return {rows:selected,cursor:selected.length?Number(selected.at(-1).id):0};
+}
+/** Official Graph only. Native media IDs are never converted to guessed shortcodes. */
+export async function recoverApprovedMessage(graph,credential,mid,sender,professional){
+ if(!validGraphId(mid)||String(sender)===String(professional))return null;
+ const path=encodeURIComponent(mid);
+ let item;
+ try{item=await graph(path,{fields:'id,from,created_time,message,attachments,shares'},credential,4000);}
+ catch(e){
+  if(!unsupportedField(e))throw e;
+  try{item=await graph(path,{fields:'id,from,created_time,message,attachments'},credential,4000);}
+  catch(e2){if(!unsupportedField(e2))throw e2;item=await graph(path,{fields:'id,from,created_time,message'},credential,4000);}
+ }
+ if(item?.id!==mid||String(item?.from?.id)!==String(sender))return null;
+ let event=reelEventsFromGraph([item],sender,professional)[0];
+ if(!event||event.urls.length)return event||null;
+ if(!item.shares){
+  try{
+   const shares=await graph(path+'/shares',{},credential,3000);
+   event=reelEventsFromGraph([{...item,shares}],sender,professional)[0]||event;
+  }catch{/* No URL is a review, not a successful recovery. */}
+ }
+ if(event.urls.length)return event;
+ const attachments=Array.isArray(item.attachments)?item.attachments:(item.attachments?.data||[]);
+ const ids=new Set();
+ for(const a of attachments.slice(0,12)){
+  if(!['ig_post','ig_reel'].includes(a?.type))continue;
+  const id=String(a?.payload?.ig_post_media_id||a?.ig_post_media_id||'');
+  if(/^[0-9]{5,32}$/.test(id))ids.add(id);
+ }
+ const urls=new Set();
+ for(const id of [...ids].slice(0,2)){
+  try{
+   const media=await graph(id,{fields:'id,permalink'},credential,3000);
+   const url=String(media?.id)===id&&typeof media?.permalink==='string'?canonical(media.permalink):null;
+   if(url)urls.add(url);
+  }catch{/* Access denied or omitted permalink stays unresolved. */}
+ }
+ return urls.size?{...event,urls:[...urls],status:'queued'}:event;
+}
