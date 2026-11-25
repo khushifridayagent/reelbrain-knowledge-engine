@@ -172,9 +172,11 @@ class GeminiInlineVision:
             'in English: tools, code, settings, workflow steps, diagrams and uncertainties. '
             'Do not guess hidden characters or claim external verification. Keep speech separate. '
             'Return JSON {"observations":[{"timestamp":"MM:SS or image","description":"visual evidence"}]}.')
-    def __init__(self,key,*,model='gemini-3.5-flash-lite',client=None):
+    def __init__(self,key,*,model='gemini-3.5-flash-lite',client=None,segment_seconds=20,max_new_segments=4):
         if not key or not re.fullmatch(r'gemini-[a-z0-9.-]+',model):raise ValueError('invalid Gemini configuration')
+        if not 1<=segment_seconds<=20 or not 1<=max_new_segments<=8:raise ValueError('invalid segment budget')
         self.key=key;self.model=model;self.client=client
+        self.segment_seconds=segment_seconds;self.max_new_segments=max_new_segments
     @staticmethod
     def parse(payload):
         try:
@@ -192,7 +194,74 @@ class GeminiInlineVision:
             return output
         except (KeyError,TypeError,ValueError,AttributeError):
             raise RuntimeError('Gemini structured visual evidence incomplete') from None
-    def analyze(self,path):
+    @staticmethod
+    def _video_duration_ms(path):
+        try:
+            p=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries',
+                              'stream=duration:format=duration','-of','json',str(path)],
+                             capture_output=True,check=True,timeout=15)
+            j=json.loads(p.stdout)
+            streams=j.get('streams') or []
+            if not streams:raise ValueError()
+            raw=streams[0].get('duration')
+            if raw in (None,'N/A'):raw=(j.get('format') or {}).get('duration')
+            seconds=float(raw)
+            if not math.isfinite(seconds) or not 0<seconds<=1800:raise ValueError()
+            return max(1,round(seconds*1000))
+        except Exception:
+            raise RuntimeError('Gemini segment duration unavailable') from None
+
+    def _analyze_segments(self,path,*,checkpoint=None,asset_index=0):
+        """Bounded semantic coverage of large media; preserve original native OCR separately."""
+        from tempfile import TemporaryDirectory
+        p=Path(path);duration=self._video_duration_ms(p)
+        span=int(self.segment_seconds*1000);new=0;retained=[]
+        version=hashlib.sha256((self.model+'|'+self.PROMPT+'|segment-v1').encode()).hexdigest()
+        for begin in range(0,duration,span):
+            end=min(duration,begin+span)
+            unit=f'gemini-segment:{version}:{asset_index}:{begin}:{end}'
+            cached=checkpoint.load('vlm',unit=unit) if checkpoint else None
+            if cached is not None:
+                retained.extend(cached[0]);continue
+            if checkpoint is not None and new>=self.max_new_segments:
+                raise QwenPartialVisualError('visual coverage pending: resume checkpointed Gemini segments',retained)
+            began=time.monotonic()
+            try:
+                with TemporaryDirectory(prefix='rb_gemini_segment_') as d:
+                    target=Path(d)/'segment.mp4'
+                    subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-ss',f'{begin/1000:.3f}',
+                                    '-i',str(p),'-t',f'{(end-begin)/1000:.3f}','-map','0:v:0','-an',
+                                    '-c:v','libx264','-preset','veryfast','-crf','20','-maxrate','4M',
+                                    '-bufsize','4M','-threads','2','-pix_fmt','yuv420p',str(target)],
+                                   capture_output=True,check=True,timeout=90)
+                    if not target.is_file() or target.stat().st_size>14*1024*1024:
+                        raise RuntimeError('Gemini segment size unavailable')
+                    actual=self._video_duration_ms(target)
+                    if actual<max(1,end-begin-350) or actual>end-begin+350:
+                        raise RuntimeError('Gemini segment duration mismatch')
+                    rows=self._inline(target)
+                if not rows or not all(isinstance(x,Observation) and x.kind=='model_inference' for x in rows):
+                    raise RuntimeError('Gemini segment evidence missing')
+                rows=[Observation(x.text,kind='model_inference',
+                                  locator=f'seg:{begin}-{end}ms/{x.locator}',confidence=x.confidence) for x in rows]
+                if checkpoint:checkpoint.save('vlm',rows,int((time.monotonic()-began)*1000),unit=unit)
+                retained.extend(rows);new+=1
+            except Exception as e:
+                category='Gemini quota exceeded' if 'quota' in str(e).lower() else 'Gemini segment unavailable'
+                raise QwenPartialVisualError(category,retained) from None
+        return retained
+
+    def analyze(self,path,*,checkpoint=None,asset_index=0):
+        p=Path(path)
+        if not p.is_file() or p.is_symlink() or p.stat().st_size>350*1024*1024:
+            raise RuntimeError('Gemini media input invalid or oversized')
+        mime=mimetypes.guess_type(str(p))[0]
+        if p.suffix.lower() in ('.mp4','.mov','.mkv','.webm','.avi') and (
+                p.stat().st_size>14*1024*1024 or mime not in ('video/mp4','video/webm','video/quicktime')):
+            return self._analyze_segments(p,checkpoint=checkpoint,asset_index=asset_index)
+        return self._inline(p)
+
+    def _inline(self,path):
         import httpx
         p=Path(path);mime=mimetypes.guess_type(str(p))[0]
         if mime not in ('video/mp4','video/webm','video/quicktime','image/jpeg','image/png','image/webp'):
@@ -231,7 +300,7 @@ class HybridVision:
             began=time.monotonic()
             try:
                 from .qwen_vl import QwenVLResearcher
-                if isinstance(provider,QwenVLResearcher):
+                if isinstance(provider,(QwenVLResearcher,GeminiInlineVision)):
                     events=provider.analyze(path,checkpoint=checkpoint,asset_index=asset_index)
                 else:events=provider.analyze(path)
                 if not events or not all(isinstance(x,Observation) and x.kind=='model_inference' for x in events):
