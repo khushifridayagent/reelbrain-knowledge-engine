@@ -48,6 +48,8 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
     complete = (media_processed and result.get('status')=='evidence_saved' and
                 not required_incomplete_stages(result) and ocr_succeeded and vlm_succeeded and
                 audio_ready and bool(observations))
+    assets=result.get('asset_count')
+    assets=assets if type(assets) is int and 1<=assets<=20 else None
     return {
         'video_analyzed': video_analyzed,
         'audio_transcribed': asr_succeeded and int(counts.get('asr') or 0) > 0,
@@ -55,6 +57,8 @@ def build_media_summary(observations: list[dict], result: dict) -> dict:
         'processing_stage': 'completed' if complete else ('partial_media' if media_processed else 'media_pending'),
         'content': {
             'media_accessed': media_processed,
+            'asset_count': assets,
+            'completed_asset_count': assets if complete else None,
             'hosted_audio_reused': result.get('hosted_audio_reused') if result.get('hosted_audio_reused') in ('transcriptfetch','scrapecreators') else None,
             'source_observations': source,
             'model_inferences': model,

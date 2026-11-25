@@ -137,6 +137,10 @@ class MetaBusinessDiscovery:
         entries=record.get('children',{}).get('data') if record.get('media_type')=='CAROUSEL_ALBUM' and isinstance(record.get('children'),dict) else [record]
         if (not isinstance(entries,list) or not 1<=len(entries)<=20):
             raise MetaMediaUnavailable('Public media unavailable: complete carousel pages not returned')
+        if record.get('media_type')=='CAROUSEL_ALBUM':
+            ids=[child.get('id') for child in entries if isinstance(child,dict)]
+            if len(entries)<2 or len(ids)!=len(entries) or any(not isinstance(i,str) or not i for i in ids) or len(set(ids))!=len(ids):
+                raise MetaMediaUnavailable('Public media unavailable: incomplete or duplicate carousel children')
         assets=[]
         for child in entries:
             if not isinstance(child,dict):raise MetaMediaUnavailable('Public media unavailable: malformed media child')

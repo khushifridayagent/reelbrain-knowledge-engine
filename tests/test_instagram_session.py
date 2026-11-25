@@ -1,5 +1,6 @@
 """Optional authorized Instagram session improves retrieval without exposing cookies."""
 import base64
+import json
 import os
 import subprocess
 import tempfile
@@ -38,6 +39,7 @@ class SessionTests(unittest.TestCase):
                 self.assertEqual(cmd[cmd.index('--cookies')+1],str(cookie))
                 folder=Path(cmd[cmd.index('-D')+1])
                 (folder/'slide_1.jpg').write_bytes(bytes.fromhex('ffd8ff')+b'x'*50)
+                (folder/'slide_1.jpg.json').write_text(json.dumps({'post_shortcode':'EXAMPLE123','count':1,'num':1,'typename':'GraphImage'}))
                 return subprocess.CompletedProcess(cmd,0,'','')
             bundle=acquire_public_bundle('https://instagram.com/p/EXAMPLE123/',Path(root),
                                          gallery_runner=gallery,cookies_file=cookie)

@@ -6,6 +6,7 @@ controls. Media only lives in a caller-managed temporary directory.
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -106,6 +107,11 @@ def acquire_public_bundle(
         '--http-timeout', '20', '--filesize-max', '100M',
         '--range', f'1-{max_items + 1}', '-D', str(folder), canonical,
     ]
+    is_post = '/p/' in canonical
+    if is_post:
+        argv[argv.index('--no-postprocessors')] = '--write-metadata'
+        # Metadata and original downloaded bytes remain in the private temp directory.
+        argv[1:1] = ['-o','extractor.instagram.previews=false','-o','extractor.instagram.audio=false']
     if cookies_file is not None:
         argv[1:1] = ['--cookies', str(cookies_file)]
     try:
@@ -124,7 +130,35 @@ def acquire_public_bundle(
     children = list(folder.iterdir())
     if any(child.is_symlink() or not child.is_file() for child in children):
         raise PublicBundleError('Unsafe/unexpected gallery output structure')
-    paths = sorted(children, key=_sort_key)
+    if is_post:
+        paths = [child for child in children if child.suffix.lower() != '.json']
+        expected_code=canonical.rstrip('/').rsplit('/',1)[-1]
+        manifest=[]
+        for path in paths:
+            sidecar=path.with_name(path.name+'.json')
+            try:
+                if sidecar.is_symlink() or not sidecar.is_file() or sidecar.stat().st_size>2*1024*1024:
+                    raise ValueError()
+                data=json.loads(sidecar.read_text(encoding='utf-8'))
+                count=data.get('count')
+                index=data.get('num',1 if count==1 else None)
+                if (data.get('post_shortcode')!=expected_code or type(count) is not int
+                        or type(index) is not int or not 1<=count<=max_items
+                        or not 1<=index<=count or
+                        (count==1 and (data.get('typename')=='GraphSidecar' or data.get('sidecar_shortcode')))):
+                    raise ValueError()
+                manifest.append((index,count,path))
+            except (ValueError,OSError,TypeError,AttributeError):
+                raise PublicBundleError('Public media unavailable: carousel_manifest_unverified') from None
+        if (not manifest or any(count!=len(paths) for _,count,_ in manifest)
+                or sorted(index for index,_,_ in manifest)!=list(range(1,len(paths)+1))):
+            raise PublicBundleError('Public media unavailable: carousel_manifest_incomplete')
+        paths=[path for _,_,path in sorted(manifest,key=lambda row:row[0])]
+        for child in children:
+            if child.suffix.lower()=='.json':
+                child.unlink()
+    else:
+        paths = sorted(children, key=_sort_key)
     if not paths:
         raise PublicBundleError('No public media files found')
     if len(paths) > max_items:

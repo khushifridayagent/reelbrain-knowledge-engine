@@ -68,6 +68,9 @@ def pg_open(db_url:str):
 
 def reusable_hosted_audio(pg,source_url:str)->str|None:
     """Reuse the exact saved third-party transcript; never relabel it as local ASR."""
+    from .sources import canonicalize_instagram
+    if '/p/' in canonicalize_instagram(source_url):
+        return None
     with pg.cursor() as cur:
         cur.execute("select verified_reel_content->'provider_audio_transcript' "
                     "from public.reelbrain_reel_knowledge where source_url=%s",(source_url,))
