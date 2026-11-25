@@ -162,3 +162,26 @@ class NativeHybridTests(unittest.TestCase):
             subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=white:s=64x64:d=0.2','-an','-c:v','libx264',str(p)],check=True,timeout=10)
             self.assertFalse(has_audio_stream(p))
             self.assertTrue(has_audio_stream(Path(d)/'missing.mp4'))
+
+    def test_shared_provider_cooldown_skips_rate_limited_provider_on_next_reel(self):
+        from reelbrain.qwen_vl import QwenPartialVisualError
+        class SharedCache(Cache):
+            def __init__(self):super().__init__();self.cooldowns={}
+            def provider_delay(self,key):return self.cooldowns.get(key,0)
+            def defer_provider(self,key,seconds):self.cooldowns[key]=seconds
+        class Limited:
+            cooldown_key='gemini_vision'
+            def __init__(self):self.calls=0
+            def analyze(self,p):self.calls+=1;raise RuntimeError('Gemini quota exceeded')
+        class Backup:
+            cooldown_key='groq_vision'
+            def analyze(self,p):return [Observation('backup',kind='model_inference')]
+        cache=SharedCache();limited=Limited()
+        for asset in (1,2):
+            self.assertEqual(HybridVision(limited,Backup()).analyze(Path('test.mp4'),checkpoint=cache,asset_index=asset)[0].text,'backup')
+        self.assertEqual(limited.calls,1)
+        self.assertGreaterEqual(cache.cooldowns['gemini_vision'],900)
+    def test_cooldown_retry_uses_earliest_available_provider(self):
+        from reelbrain.resumable_media import retry_seconds
+        self.assertEqual(retry_seconds({'vlm':'QwenPartialVisualError: hybrid provider cooldown:1200'}),1200)
+        self.assertEqual(retry_seconds({'vlm':'QwenPartialVisualError: hybrid provider cooldown:30'}),900)
