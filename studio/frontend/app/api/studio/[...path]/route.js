@@ -9,7 +9,7 @@ export async function POST(req,{params}){
  if(!sameOrigin(req.headers.get('origin'),req.headers.get('host'),process.env.STUDIO_SITE_ORIGIN))return reply({detail:'Cross-origin requests denied'},403);
  const {path}=await params;if(path.length!==1||!allowed.has(path[0]))return reply({detail:'Not found'},404);
  if(!req.headers.get('content-type')?.startsWith('application/json'))return reply({detail:'JSON required'},415);
- const target=process.env.STUDIO_BACKEND_URL,token=process.env.STUDIO_BACKEND_TOKEN;
+ const target=process.env.STUDIO_BACKEND_URL,token=process.env.STUDIO_HOST_TOKEN||process.env.STUDIO_BACKEND_TOKEN;
  if(!target||!token||token.length<32)return reply({detail:'Backend not configured'},503);
  try{
   const text=await req.text();if(text.length>24000)return reply({detail:'Request too large'},413);

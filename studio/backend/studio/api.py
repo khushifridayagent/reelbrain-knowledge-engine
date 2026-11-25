@@ -34,15 +34,20 @@ class Services:
             # Only connect to the expected project with a dedicated Studio role.
             from urllib.parse import urlsplit
             u=urlsplit(dsn);host=u.hostname or '';user=u.username or ''
-            if not (host=='db.xlkdzrhzizuftbnitodr.supabase.co' or (host.endswith('.pooler.supabase.com') and user=='reelbrain_studio_app.xlkdzrhzizuftbnitodr')):raise RuntimeError('Wrong database project.')
-            if user not in ('reelbrain_studio_app','reelbrain_studio_app.xlkdzrhzizuftbnitodr'):raise RuntimeError('Dedicated Studio credential required; never use postgres/service_role.')
+            if not (host=='db.xlkdzrhzizuftbnitodr.supabase.co' or (host.endswith('.pooler.supabase.com') and user in ('reelbrain_studio_app.xlkdzrhzizuftbnitodr','reelbrain_studio_host.xlkdzrhzizuftbnitodr'))):raise RuntimeError('Wrong database project.')
+            if user not in ('reelbrain_studio_app','reelbrain_studio_app.xlkdzrhzizuftbnitodr','reelbrain_studio_host','reelbrain_studio_host.xlkdzrhzizuftbnitodr'):raise RuntimeError('Dedicated Studio credential required; never use postgres/service_role.')
             self.db=Database(dsn,ca_cert=os.getenv('STUDIO_DB_CA_CERT',''))
+        if self.index is None and os.getenv('STUDIO_RETRIEVAL') == 'postgres':
+            from .hosted import HostedIndex
+            self.index = HostedIndex(self.db)
         if self.index is None:
             path=Path(os.getenv('STUDIO_INDEX_PATH','./data/index.sqlite'));path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             self.index=SearchIndex(path,LocalModels())
     def refresh(self):
         with self.lock:
             self.open()
+            if os.getenv('STUDIO_RETRIEVAL') == 'postgres':
+                return {'retrieval': 'postgres_keyword', 'more_pending': False}
             if time.monotonic()-self.last>30 or not self.sync_state:
                 self.sync_state=self.db.refresh(self.index);self.last=time.monotonic()
             return self.sync_state
