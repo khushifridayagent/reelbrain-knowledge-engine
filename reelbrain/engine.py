@@ -194,7 +194,7 @@ class LocalPipelineEngine:
                     # Neuron allocation runs out halfway through a Reel.
                     if stage=='ocr' and self.native_ocr is not None:
                         partial=getattr(exc,'partial_observations',None)
-                        if isinstance(partial,list) and all(isinstance(ev,Observation) and ev.kind in ('ocr','qr') for ev in partial):
+                        if isinstance(partial,list) and all(isinstance(ev,Observation) and ev.kind in ('ocr','qr','ocr_uncertain') for ev in partial):
                             results[stage]=partial
                     if stage=='vlm':
                         partial=getattr(exc,'partial_observations',None)
