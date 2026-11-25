@@ -26,6 +26,14 @@ class BatchOutcomeTests(unittest.TestCase):
                                        'acknowledged_failure': False}])
         self.assertIn('acknowledged', str(raised.exception).lower())
 
+    def test_progress_and_incomplete_have_truthful_errors(self):
+        for status,phrase in [('deferred_progress','coverage'),('deferred_incomplete','incomplete')]:
+            with self.subTest(status=status):
+                with self.assertRaises(RuntimeError) as raised:
+                    require_successful_batch([{'status':status,'acknowledged_failure':True}])
+                self.assertIn(phrase,str(raised.exception).lower())
+                self.assertNotIn('quota',str(raised.exception).lower())
+
     def test_unknown_result_status_is_not_treated_as_success(self):
         with self.assertRaises(RuntimeError):
             require_successful_batch([{'status': 'secretly_failed'}])
