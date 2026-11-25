@@ -211,3 +211,18 @@ class HybridVision:
                 if isinstance(e,QwenPartialVisualError):partial.extend(e.partial_observations)
                 failures.append('quota exceeded' if 'quota' in str(e).lower() else 'unavailable')
         raise QwenPartialVisualError('quota exceeded' if 'quota exceeded' in failures else 'all visual providers unavailable',partial)
+
+class SpeechFallback:
+    requires_external=True
+    """Preserve the existing typed ASR contract; local CPU recovery on remote failure."""
+    def __init__(self,primary,offline):
+        self.primary=primary;self.offline=offline
+    def transcribe(self,path):
+        for provider in (self.primary,self.offline):
+            try:
+                events=provider.transcribe(path)
+                if events and all(isinstance(x,Observation) and x.kind=='asr' for x in events):
+                    return events
+            except Exception:
+                pass
+        raise RuntimeError('speech extraction unavailable')
