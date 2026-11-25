@@ -40,3 +40,31 @@ class StageCheckpoint:
                     on conflict(source_url,media_sha256,pipeline_version,stage) do nothing""",
                     (self.url,self.sha,self._version(unit),stage,json.dumps([asdict(x) for x in events],ensure_ascii=False),elapsed))
         print('STAGE_CHECKPOINT_SAVED stage='+stage+' observations='+str(len(events)),flush=True)
+
+    @staticmethod
+    def _provider_key(key):
+        if key not in ('gemini_vision','groq_vision','cloudflare_vision'):
+            raise ValueError('unsupported hybrid provider')
+        return key
+
+    def provider_delay(self,key):
+        key=self._provider_key(key)
+        with self._lock,self.pg.transaction():
+            with self.pg.cursor() as cur:
+                cur.execute("""select greatest(0,ceil(extract(epoch from blocked_until-now())))::int
+                    from reelbrain_research.hybrid_provider_cooldowns where provider=%s""",(key,))
+                row=cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def defer_provider(self,key,seconds):
+        from .durable_worker import assert_lease
+        key=self._provider_key(key)
+        seconds=max(300,min(86400,int(seconds)))
+        with self._lock,self.pg.transaction():
+            assert_lease(self.pg,self.lease)
+            with self.pg.cursor() as cur:
+                cur.execute("""insert into reelbrain_research.hybrid_provider_cooldowns
+                    (provider,blocked_until,updated_at) values (%s,now()+(%s * interval '1 second'),now())
+                    on conflict(provider) do update set
+                    blocked_until=greatest(reelbrain_research.hybrid_provider_cooldowns.blocked_until,excluded.blocked_until),
+                    updated_at=now()""",(key,seconds))

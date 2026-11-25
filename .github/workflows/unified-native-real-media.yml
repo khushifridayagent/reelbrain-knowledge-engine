@@ -1,0 +1,91 @@
+name: Unified native real media read-only acceptance
+on:
+  push:
+    branches: [feat/unified-native-hybrid]
+    paths: ['.github/workflows/unified-native-real-media.yml']
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install bounded native inspection runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
+          python -m pip install --disable-pip-version-check 'httpx>=0.27,<1' 'psycopg[binary]>=3.2,<4' 'av==18.1.0' 'numpy>=1.26,<3' 'opencv-python-headless>=4.8,<5' 'Pillow>=10,<13'
+      - name: Read-only authorized real media and native processing benchmark
+        env:
+          DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+          META_TOKEN: ${{ secrets.REELBRAIN_META_PERMANENT_TOKEN }}
+          IG_ID: ${{ vars.REELBRAIN_META_IG_USER_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json,os,time,sys,tempfile
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          import httpx,psycopg
+          from reelbrain.meta_business_media import acquire_meta_bundle
+          from reelbrain.native_hybrid import NativeOCR,NativeInspectionPending
+          from reelbrain.contracts import Observation
+          def emit(test,**kw):print('UNIFIED_ACCEPTANCE '+json.dumps({'test':test,**kw},sort_keys=True),flush=True)
+          # Metadata-only model availability: no inference or media upload.
+          for label,url,key,header,model in (
+              ('gemini','https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite','GEMINI_API_KEY','x-goog-api-key','gemini-3.5-flash-lite'),
+              ('groq','https://api.groq.com/openai/v1/models','GROQ_API_KEY','Authorization','qwen/qwen3.8-27b')):
+              try:
+                  v=os.getenv(key,'')
+                  if not v:emit('provider_metadata',provider=label,present=False);continue
+                  r=httpx.get(url,headers={header:('Bearer '+v if header=='Authorization' else v)},timeout=10,follow_redirects=False)
+                  j=r.json() if r.status_code==200 else {}
+                  ids=[m.get('id') for m in j.get('data',[]) if isinstance(m,dict)] if label=='groq' else []
+                  emit('provider_metadata',provider=label,http=r.status_code,model_available=(model in ids if label=='groq' else str(j.get('name','')).endswith('/'+model)),whisper_available=('whisper-large-v3-turbo' in ids if label=='groq' else None))
+              except Exception:emit('provider_metadata',provider=label,unavailable=True)
+          try:
+              u=urlsplit(os.environ['DB_URL'])
+              if 'xlkdzrhzizuftbnitodr' not in (u.username or '') and 'xlkdzrhzizuftbnitodr' not in (u.hostname or ''):raise ValueError()
+              with psycopg.connect(os.environ['DB_URL'],connect_timeout=8,options='-c default_transaction_read_only=on -c statement_timeout=5000') as pg:
+                  with pg.cursor() as cur:
+                      cur.execute("select j.id,j.source_url,k.creator_handle from public.reelbrain_dm_jobs j join public.reelbrain_reel_knowledge k using(source_url) where j.id=9 and k.creator_handle is not null")
+                      row=cur.fetchone()
+              if not row:raise ValueError()
+          except Exception:
+              emit('read_only_db',pass_=False);sys.exit(1)
+          class Cache:
+              def __init__(self):self.rows={}
+              def load(self,stage,*,unit=None):return self.rows.get((stage,unit))
+              def save(self,stage,events,elapsed,*,unit=None):self.rows[(stage,unit)]=(events,elapsed)
+          with tempfile.TemporaryDirectory(prefix='rb-native-acceptance-') as td:
+              try:
+                  bundle=acquire_meta_bundle(row[1],row[2],os.environ['META_TOKEN'],os.environ['IG_ID'],Path(td),max_total_bytes=40*1024*1024)
+              except Exception:
+                  emit('acquire',job=int(row[0]),pass_=False);sys.exit(1)
+              emit('acquire',job=int(row[0]),pass_=True,assets=len(bundle.paths),bytes=sum(p.stat().st_size for p in bundle.paths))
+              cache=Cache()
+              asset=bundle.paths[0]
+              start=time.monotonic()
+              for attempt,budget in ((1,70),(2,150)):
+                  try:
+                      result=NativeOCR(max_seconds=budget,max_new_chunks=128).analyze(asset,checkpoint=cache,asset_index=1)
+                      complete=True
+                  except NativeInspectionPending as exc:
+                      result=exc.partial_observations;complete=False
+                  except Exception:
+                      emit('native',attempt=attempt,error='unexpected_inspection_failure');sys.exit(1)
+                  manifests=[json.loads(e.text) for events,_ in cache.rows.values() for e in events if e.kind=='native_manifest']
+                  count=sum(len(m) for m in manifests)
+                  emit('native',attempt=attempt,frames_checkpointed=count,unique_frame_hashes=len({f['sha256'] for m in manifests for f in m}),ocr=sum(x.kind=='ocr' for x in result),uncertain_ocr=sum(x.kind=='ocr_uncertain' for x in result),qr=sum(x.kind=='qr' for x in result),complete=complete,elapsed_seconds=round(time.monotonic()-start,2))
+                  if complete:break
+              # No production writes, inference, raw frames, URLs, private content or artifacts.
+              emit('isolation',production_writes=0,remote_inference_calls=0)
+              if not cache.rows:sys.exit(1)
+          PY

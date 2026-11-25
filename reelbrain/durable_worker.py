@@ -52,6 +52,11 @@ def checked_config()->dict:
             missing.append('REELBRAIN_PERSONAL_KNOWLEDGE_USE_APPROVED')
         if not flag('REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD'):missing.append('REELBRAIN_ALLOW_PUBLIC_REEL_DOWNLOAD')
     else:missing.append('REELBRAIN_MEDIA_ACQUISITION (must be apify or yt_dlp_public)')
+    if flag('REELBRAIN_NATIVE_HYBRID_ENABLED'):
+        if mode!='yt_dlp_public':missing.append('native hybrid requires public-media acquisition path')
+        if not flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED'):missing.append('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
+        if not flag('REELBRAIN_HYBRID_FREE_PROVIDERS_CONFIRMED'):missing.append('REELBRAIN_HYBRID_FREE_PROVIDERS_CONFIRMED')
+        if not (os.getenv('GEMINI_API_KEY') or os.getenv('GROQ_API_KEY')):missing.append('at least one authorized Gemini or Groq key')
     if missing:raise RuntimeError('Worker will not claim jobs before configured: '+', '.join(missing))
     return {'db_url':os.environ['REELBRAIN_DB_URL'],
             'apify_token':os.getenv('APIFY_API_TOKEN',''), 'acquisition':mode}
@@ -97,6 +102,9 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                 generic_external_allowed=flag('REELBRAIN_EXTERNAL_MODEL_UPLOAD_ALLOWED')
                 from .cloudflare_vision_config import cloudflare_qwen_config
                 cf_vision=cloudflare_qwen_config()
+                native_enabled=(acquisition=='yt_dlp_public' and lease is not None and flag('REELBRAIN_NATIVE_HYBRID_ENABLED'))
+                if native_enabled and not (generic_external_allowed and flag('REELBRAIN_HYBRID_FREE_PROVIDERS_CONFIRMED')):
+                    raise RuntimeError('Native hybrid requires explicit upload and free-provider approval')
                 # Provider-specific Cloudflare vision opt-in must NOT silently
                 # activate unrelated Groq paid ASR or Gemini model uploads.
                 if not hosted_audio and generic_external_allowed and os.getenv('GROQ_API_KEY'):
@@ -104,6 +112,26 @@ def process_url(source_url:str,pg,*,apify_token:str,acquisition:str='apify',leas
                         os.environ['GROQ_API_KEY'],
                         os.getenv('GROQ_ASR_MODEL','whisper-large-v3-turbo'),
                         'https://api.groq.com'))
+                if native_enabled:
+                    from .native_hybrid import NativeOCR, GeminiInlineVision, HybridVision, SpeechFallback
+                    from .qwen_vl import QwenVLResearcher
+                    from .local_asr import FasterWhisperSpeechToText
+                    providers=[]
+                    if os.getenv('GEMINI_API_KEY'):
+                        providers.append(GeminiInlineVision(os.environ['GEMINI_API_KEY']))
+                    if os.getenv('GROQ_API_KEY'):
+                        providers.append(QwenVLResearcher('https://api.groq.com/openai/v1',model='qwen/qwen3.8-27b',api_key=os.environ['GROQ_API_KEY'],max_frames=1,max_batches=8))
+                    if cf_vision:
+                        providers.append(QwenVLResearcher(cf_vision['base_url'],model=cf_vision['model'],api_key=cf_vision['api_key'],max_frames=4,max_batches=8))
+                    if not providers:raise RuntimeError('No explicitly authorized hybrid vision provider configured')
+                    for provider in providers:
+                        if isinstance(provider,QwenVLResearcher):
+                            provider.cooldown_key='cloudflare_vision' if provider.cloudflare_direct else 'groq_vision'
+                    vlm=HybridVision(*providers)
+                    if not hosted_audio and flag('REELBRAIN_ENABLE_LOCAL_ASR'):
+                        offline=FasterWhisperSpeechToText(os.getenv('REELBRAIN_LOCAL_ASR_MODEL','small'))
+                        asr=SpeechFallback(asr,offline) if asr is not None else offline
+                    return LocalPipelineEngine(store,audio_model=asr,video_model=vlm,native_ocr=NativeOCR())
                 if cf_vision:
                     from .qwen_vl import QwenVLResearcher
                     vlm=QwenVLResearcher(

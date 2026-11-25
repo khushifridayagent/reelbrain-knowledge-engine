@@ -14,6 +14,7 @@ def model_quota_retry_seconds(stage_errors:dict|None, *, now:datetime|None=None)
         error=stage_errors.get(stage)
         if not isinstance(error,str):continue
         line=error.lower()[:250]
+        if 'hybrid provider rate limit' in line:return 900
         if any(token in line for token in (
             'quota exceeded','insufficient credits','resource exhausted',
             '429','rate limit','rate_limit','neuron','402')):

@@ -40,13 +40,14 @@ def adaptive_local_ocr(path:Path)->list[Observation]:
 
 class LocalPipelineEngine:
     def __init__(self,store:KnowledgeStore, *, ocr:Callable[[Path],list[Observation]]|None=None,
-                 audio_model=None,video_model=None,audio_extractor=None,fact_model=None):
+                 audio_model=None,video_model=None,audio_extractor=None,fact_model=None,native_ocr=None):
         self.store=store
         self.ocr=ocr or adaptive_local_ocr
         self.audio_model=audio_model
         self.video_model=video_model
         self.audio_extractor=audio_extractor
         self.fact_model=fact_model
+        self.native_ocr=native_ocr
 
     def _transcribe(self,media:Path):
         from .media import extract_audio
@@ -74,8 +75,11 @@ class LocalPipelineEngine:
         # Local CPU Whisper is genuinely offline. Only adapters that could
         # transfer audio/video to another host need an external-upload opt-in.
         # Treat adapters without an explicit marker as remote by default.
-        video_present=any(p.suffix.lower() in {'.mp4','.mov','.mkv','.webm','.avi'}
-                          for p in media_assets)
+        video_assets=[p for p in media_assets if p.suffix.lower() in {'.mp4','.mov','.mkv','.webm','.avi'}]
+        if self.native_ocr is not None:
+            from .native_hybrid import has_audio_stream
+            video_assets=[p for p in video_assets if has_audio_stream(p)]
+        video_present=bool(video_assets)
         adapters=(
             (self.audio_model,video_present),
             (self.video_model,True),
@@ -91,18 +95,23 @@ class LocalPipelineEngine:
             observations=[]
             for idx,asset in enumerate(media_assets,1):
                 try:
-                    found=self.ocr(asset)
+                    found=(self.native_ocr.analyze(asset,checkpoint=checkpoint,asset_index=idx)
+                           if self.native_ocr is not None else self.ocr(asset))
                     if not isinstance(found,list):raise TypeError('OCR output must be a list')
                     for ev in found:
                         if not isinstance(ev,Observation):raise TypeError('OCR output must contain typed observations')
                         locator=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
                         observations.append(Observation(ev.text,kind=ev.kind,locator=locator,confidence=ev.confidence))
                 except Exception as exc:
+                    if self.native_ocr is not None:
+                        from .native_hybrid import NativeInspectionPending
+                        for ev in getattr(exc,'partial_observations',[]):
+                            loc=(f'slide:{idx:02d}/'+ev.locator) if len(media_assets)>1 else ev.locator
+                            observations.append(Observation(ev.text,kind=ev.kind,locator=loc,confidence=ev.confidence))
+                        raise NativeInspectionPending('native OCR incomplete; resume saved chunks',observations) from None
                     if len(media_assets)==1:raise
                     slide_failures.append(f'slide:{idx:02d}:{type(exc).__name__}')
             return observations
-        video_assets=[p for p in media_assets if p.suffix.lower() in
-                      {'.mp4','.mov','.mkv','.webm','.avi'}]
         def transcribe_all():
             observations=[]
             for idx,asset in enumerate(media_assets,1):
@@ -127,7 +136,7 @@ class LocalPipelineEngine:
                             ev.text,kind='model_inference',
                             locator=locator,confidence=ev.confidence))
                 try:
-                    if checkpoint is not None and isinstance(self.video_model,QwenVLResearcher):
+                    if checkpoint is not None and (isinstance(self.video_model,QwenVLResearcher) or getattr(self.video_model,'supports_checkpoint',False) is True):
                         add_results(self.video_model.analyze(asset,checkpoint=checkpoint,asset_index=idx))
                     else:
                         add_results(self.video_model.analyze(asset))
@@ -157,9 +166,14 @@ class LocalPipelineEngine:
             start=time.monotonic()
             try:return func(),int((time.monotonic()-start)*1000)
             except Exception:raise
+        def stage_unit(label):
+            if label=='ocr' and self.native_ocr is not None:return 'native-hybrid-v1:full-ocr'
+            if label=='vlm' and getattr(self.video_model,'supports_checkpoint',False) is True:return 'native-hybrid-v1:full-vlm'
+            return None
         if checkpoint:
             for label in list(tasks):
-                cached=checkpoint.load(label)
+                unit=stage_unit(label)
+                cached=checkpoint.load(label,unit=unit) if unit else checkpoint.load(label)
                 if cached is not None:
                     results[label],measurements[label]=cached
                     del tasks[label]
@@ -179,6 +193,10 @@ class LocalPipelineEngine:
                 except Exception as exc:
                     # Keep completed visual batches when the shared Cloudflare
                     # Neuron allocation runs out halfway through a Reel.
+                    if stage=='ocr' and self.native_ocr is not None:
+                        partial=getattr(exc,'partial_observations',None)
+                        if isinstance(partial,list) and all(isinstance(ev,Observation) and ev.kind in ('ocr','qr','ocr_uncertain') for ev in partial):
+                            results[stage]=partial
                     if stage=='vlm':
                         partial=getattr(exc,'partial_observations',None)
                         if isinstance(partial,list) and all(
@@ -188,7 +206,9 @@ class LocalPipelineEngine:
                     errors[stage]=f'{type(exc).__name__}: {exc}'[:250]
                 if checkpoint and stage in results and stage not in errors and not (
                     (stage=='ocr' and slide_failures) or (stage=='vlm' and visual_coverage_gaps)):
-                    checkpoint.save(stage,results[stage],measurements[stage])
+                    unit=stage_unit(stage)
+                    if unit:checkpoint.save(stage,results[stage],measurements[stage],unit=unit)
+                    else:checkpoint.save(stage,results[stage],measurements[stage])
         if slide_failures:
             errors['ocr']='OCR failed on '+','.join(slide_failures[:20])
         if visual_coverage_gaps:
