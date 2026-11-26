@@ -41,11 +41,28 @@ export async function dispatchOnce(env, requestFetch=fetch){
     if(!get.ok)return statusForHTTP(get.status);
     const info=await get.json();
     if(!info||typeof info.state!=='string')return 'invalid_github_response';
-    if(info.state!=='active'){
+    // Respect an explicit operator pause. Only the platform inactivity state
+    // is eligible for autonomous reactivation.
+    if(info.state!=='active'&&info.state!=='disabled_inactivity')return 'workflow_disabled';
+    if(info.state==='disabled_inactivity'){
       // A once-active repository can become disabled by GitHub's 60-day
       // inactivity policy. Scoped Actions write permission is required.
       const enabled=await request('PUT',BASE+'/enable');
       if(!enabled.ok)return statusForHTTP(enabled.status);
+    }
+    // A GitHub concurrency group allows one running and one pending run.
+    // Do not replace an existing successor; allow exactly one queued successor
+    // to preserve throughput across long-running media batches. Fail closed if
+    // the API cannot establish the queue state. The native hourly cron remains
+    // an independent liveness fallback.
+    const runs=await request('GET',BASE+'/runs?per_page=50');
+    if(!runs.ok)return statusForHTTP(runs.status);
+    const snapshot=await runs.json();
+    if(!Array.isArray(snapshot?.workflow_runs))return 'invalid_github_response';
+    const pendingStates=new Set(['queued','pending','waiting','requested']);
+    for(const run of snapshot.workflow_runs){
+      if(pendingStates.has(run?.status))return 'already_queued';
+      if(run?.status!=='in_progress'&&run?.status!=='completed')return 'invalid_github_response';
     }
     // The workflow itself verifies the dedicated DB secret and checks for
     // eligible queue jobs, skipping heavy installations when the queue is idle.
