@@ -204,6 +204,22 @@ def download_source_assets(assets:tuple[MetaSourceAsset,...],output_directory:Pa
                 raise
             except Exception:
                 raise MetaMediaUnavailable('Public media unavailable: Meta CDN fetch failed') from None
+            # The provider's IMAGE type is not a promise of JPEG encoding.
+            # Recognize the existing supported image formats by source bytes,
+            # never by a URL suffix or an untrusted Content-Type header.
+            if asset.media_type=='IMAGE':
+                with path.open('rb') as inp:
+                    magic=inp.read(16)
+                suffix=('.png' if magic.startswith(bytes.fromhex('89504e470d0a1a0a'))
+                        else '.webp' if magic.startswith(b'RIFF') and magic[8:12]==b'WEBP'
+                        else '.jpg')
+                if suffix!=path.suffix:
+                    target=path.with_suffix(suffix)
+                    if target.exists() or target.is_symlink():
+                        raise MetaMediaUnavailable('Public media unavailable: destination collision')
+                    path.rename(target)
+                    created[-1]=target
+                    path=target
             if not _valid_asset(path):
                 raise MetaMediaUnavailable('Public media unavailable: Meta returned invalid media bytes')
             paths.append(path)
