@@ -94,7 +94,8 @@ jobs:
             echo "::notice::Reelbrain DB URL secret exists in this repository; processing will be attempted."
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::REELBRAIN_DB_URL is missing from this repository's Actions secrets. Processing skipped."
+            echo "::error::REELBRAIN_DB_URL is missing from this repository's Actions secrets. No processing attempted."
+            exit 1
           fi
       - uses: actions/checkout@v4
         if: ${{ steps.secret_check.outputs.ready == 'true' }}
@@ -141,6 +142,9 @@ jobs:
               print('Queue empty or all sources deferred: skipping heavy installs safely.')
           PY
       - name: URL-first speech transcript (optional and strict-credit-capped)
+        id: optional_speech
+        continue-on-error: true
+        timeout-minutes: 5
         if: ${{ steps.secret_check.outputs.ready == 'true' && vars.REELBRAIN_HOSTED_TRANSCRIPT_ENABLED == '1' && vars.REELBRAIN_HOSTED_TRANSCRIPT_BUDGET_APPROVED == '1' }}
         shell: bash
         run: |
@@ -156,7 +160,13 @@ jobs:
           print('Verified transcripts persisted:',result['jobs_completed'])
           print('Provider starts attempted:',result['provider_starts'])
           PY
+      - name: Report optional speech failure without blocking required media
+        if: ${{ !cancelled() && steps.optional_speech.outcome == 'failure' }}
+        run: |
+          echo '::warning::Optional hosted speech failed; original media pipeline and local speech fallback continue.'
+          echo 'Optional hosted speech failed; required media extraction still runs. No transcript is assumed complete.' >> "$GITHUB_STEP_SUMMARY"
       - name: Cache open-source Whisper model weights (no user data)
+        continue-on-error: true
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         uses: actions/cache@v4
         with:
@@ -166,8 +176,8 @@ jobs:
         if: ${{ steps.secret_check.outputs.ready == 'true' && steps.queue_check.outputs.has_jobs == 'true' }}
         shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=25 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=25 install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
       - name: Start private ephemeral open-source Cobalt
         id: cobalt
@@ -220,6 +230,16 @@ jobs:
           result = drain_overlapping(checked_config(), max_jobs=4)
           print('Claimed jobs:', len(result))
           print('Outcomes:', [item['status'] for item in result])
+          # Report only aggregate outcomes; never put URLs or tokens in summaries.
+          from collections import Counter
+          import os
+          counts=Counter(item['status'] for item in result)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as summary:
+              summary.write('## Media batch outcomes\\n\\n')
+              summary.write('Claimed jobs: '+str(len(result))+'\\n\\n')
+              for status in sorted(counts):
+                  summary.write('- '+status+': '+str(counts[status])+'\\n')
+              summary.write('\\nDeferred or partial results are not completed media.\\n')
           # Retry/defer ACK does NOT count as actual Reel extraction success.
           require_successful_batch(result)
           PY
