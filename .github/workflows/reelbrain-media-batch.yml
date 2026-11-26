@@ -10,7 +10,9 @@ on:
     paths:
       - '.github/workflows/reelbrain-media-batch.yml'
   schedule:
-    - cron: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *'
+    # Cloudflare checks for a queued successor every five minutes.
+    # Native GitHub schedule is an independent hourly fallback, not a second fast dispatcher.
+    - cron: '3 * * * *'
 
 permissions:
   contents: read
