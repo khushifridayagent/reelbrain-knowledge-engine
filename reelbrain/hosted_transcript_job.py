@@ -52,6 +52,7 @@ def _reserve_one(pg,provider='scrapecreators'):
                   LEFT JOIN reelbrain_research.hosted_transcript_attempts a
                     ON a.source_url=k.source_url
                  WHERE k.processing_stage='media_pending'
+                   AND k.source_url ~ '^https://www[.]instagram[.]com/(reel|tv)/[A-Za-z0-9_-]+/$'
                    AND j.status IN ('queued','partial')
                    AND NOT (coalesce(k.verified_reel_content,'{}'::jsonb) ? 'provider_audio_transcript')
                    AND (a.source_url IS NULL
@@ -64,6 +65,15 @@ def _reserve_one(pg,provider='scrapecreators'):
             hit=cur.fetchone()
             if not hit:return None
             url=hit[0]
+            # Validate again before touching the credit ledger. Posts need
+            # original slide media; hosted Reel speech is not reused for posts.
+            from .sources import canonicalize_instagram
+            try:
+                canonical=canonicalize_instagram(url)
+            except (ValueError,AttributeError,TypeError):
+                return None
+            if canonical!=url or canonical.split('/')[3] not in ('reel','tv'):
+                return None
             if provider=='transcriptfetch':
                 # Enforce actual LIVE account credits (free GET /api/v2/me)
                 # before claiming. This is a usage ledger, not a 60/day cap.
