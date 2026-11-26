@@ -34,6 +34,29 @@ class BatchOutcomeTests(unittest.TestCase):
                 self.assertIn(phrase,str(raised.exception).lower())
                 self.assertNotIn('quota',str(raised.exception).lower())
 
+    def test_mixed_durable_progress_and_deferrals_are_not_total_failure(self):
+        # Exact incident shape: two persisted media results plus two safe deferrals.
+        results = [{'status': 'deferred_access', 'acknowledged_failure': True},
+                   {'status': 'evidence_saved'}, {'status': 'evidence_saved'},
+                   {'status': 'deferred_progress', 'acknowledged_failure': True}]
+        require_successful_batch(results)
+        require_successful_batch(list(reversed(results)))
+
+    def test_mixed_batch_still_fails_on_hard_or_unacknowledged_failure(self):
+        for failure in ({'status': 'retry_or_dead_letter', 'acknowledged_failure': True},
+                        {'status': 'deferred_access', 'acknowledged_failure': False},
+                        {'status': 'deferred_progress', 'acknowledged_failure': False},
+                        {'status': 'unknown'}):
+            with self.subTest(failure=failure):
+                with self.assertRaises(RuntimeError):
+                    require_successful_batch([{'status': 'evidence_saved'}, failure])
+
+    def test_all_access_or_quota_deferrals_remain_unsuccessful(self):
+        for status in ('deferred_access', 'deferred_model_quota'):
+            with self.subTest(status=status):
+                with self.assertRaises(RuntimeError):
+                    require_successful_batch([{'status': status, 'acknowledged_failure': True}])
+
     def test_unknown_result_status_is_not_treated_as_success(self):
         with self.assertRaises(RuntimeError):
             require_successful_batch([{'status': 'secretly_failed'}])
