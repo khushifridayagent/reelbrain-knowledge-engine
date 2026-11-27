@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 _FIELDS=("pending","old_pending","recent_completed","stale_leases","dead_letters")
+_EXTRA_ALERTS={
+    "exhausted_queued":"exhausted_queued",
+    "invalid_leases":"invalid_lease",
+    "missing_availability":"missing_availability",
+    "processed_without_completion":"completion_mismatch",
+    "unresolved_incomplete":"unresolved_required_stage",
+    "overdue_untouched":"queue_starvation",
+}
+_ALL_FIELDS=_FIELDS+tuple(_EXTRA_ALERTS)
 def evaluate_health(row):
     if not isinstance(row,dict) or any(type(row.get(k)) is not int or row[k]<0 for k in _FIELDS):
         raise ValueError("Invalid queue health metrics")
+    if any(type(row[k]) is not int or row[k]<0
+           for k in _EXTRA_ALERTS if k in row):
+        raise ValueError("Invalid additional queue health metrics")
     if row["old_pending"]>row["pending"]:
         raise ValueError("Inconsistent queue health metrics")
     alerts=[]
@@ -14,6 +26,7 @@ def evaluate_health(row):
         alerts.append("stale_lease")
     if row["dead_letters"]:
         alerts.append("dead_letter")
+    alerts.extend(alert for metric,alert in _EXTRA_ALERTS.items() if row.get(metric,0))
     return alerts
 
 def audit_queue(pg):
@@ -26,10 +39,22 @@ def audit_queue(pg):
                                   and updated_at>=now()-interval '24 hours'),
                  count(*) filter(where status='leased'
                                   and lease_until<now()-interval '30 minutes'),
-                 count(*) filter(where status='dead_letter')
-          from public.reelbrain_dm_jobs
+                 count(*) filter(where status='dead_letter'),
+                 count(*) filter(where status='queued' and attempts>=max_attempts),
+                 count(*) filter(where status='leased' and (lease_token is null or lease_until is null)),
+                 count(*) filter(where status='queued' and available_at is null),
+                 count(*) filter(where status='processed' and not exists (
+                   select 1 from public.reelbrain_reel_knowledge k
+                   where k.source_url=j.source_url and k.processing_stage='completed')),
+                 count(*) filter(where status='queued'
+                   and last_error='Required media stage incomplete; automatic retry'
+                   and created_at<now()-interval '24 hours'),
+                 count(*) filter(where status='queued'
+                   and available_at<now()-interval '48 hours'
+                   and updated_at<now()-interval '48 hours')
+          from public.reelbrain_dm_jobs j
         """)
-        row=dict(zip(_FIELDS,cur.fetchone(),strict=True))
+        row=dict(zip(_ALL_FIELDS,cur.fetchone(),strict=True))
     return row,evaluate_health(row)
 
 def main():

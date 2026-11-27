@@ -2,14 +2,23 @@ name: Reelbrain isolated validation
 on:
   pull_request:
   push:
-    branches: [feat/instagram-dm-research-v08]
+    branches: [main, feat/instagram-dm-research-v08]
+    paths:
+      - 'reelbrain/**'
+      - 'deploy/reelbrain-cloudflare-clock*'
+      - 'tests/**'
+      - 'requirements*.txt'
+      - '.github/workflows/**'
 permissions:
   contents: read
 jobs:
   core-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -18,8 +27,8 @@ jobs:
           node-version: '22'
       - name: Install local dependencies and media test tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=25 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=25 install -y ffmpeg tesseract-ocr tesseract-ocr-eng
           python -m pip install -r requirements.txt -r requirements-site.txt -r requirements-web.txt
       - name: Verify pinned local audio decoder against synthetic WAV
         run: |
@@ -42,7 +51,7 @@ jobs:
       - name: Python tests (real network and model calls are not used)
         run: python -m unittest discover -s tests -t .
       - name: JS parser and coordinator tests
-        run: node --test tests/*.test.mjs
+        run: node --test tests/*.test.mjs deploy/reelbrain-cloudflare-clock.test.mjs
       - name: Verify isolated Supabase connection (read-only, no credentials printed)
         if: github.event_name == 'push' && github.repository == 'khushifridayagent/reelbrain-knowledge-engine'
         env:

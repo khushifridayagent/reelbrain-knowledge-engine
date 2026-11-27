@@ -51,7 +51,7 @@ def require_successful_batch(outcomes: list[dict]) -> dict:
             raise RuntimeError("Unexpected media worker result; refusing false success")
         if status in {"evidence_saved", "processed"}:
             completed += 1
-    if unresolved and not completed:
+    if unresolved:
         raise RuntimeError(unresolved[0])
     state = ("partial" if completed else "deferred") if deferred else (
         "completed" if completed else "idle" if not outcomes else "partial")
