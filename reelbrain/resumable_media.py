@@ -48,16 +48,22 @@ def required_incomplete_stages(result):
     return sorted(missing)
 
 def classify_partial(errors):
-    """Distinguish explicit coverage yield, provider quota and unresolved errors."""
-    errors=errors or {}
-    for stage in ('vlm','asr'):
-        detail=str(errors.get(stage,'')).lower()
-        if any(t in detail for t in ('hybrid provider cooldown:','quota exceeded','rate limit','insufficient credits','resource exhausted','neuron quota','http 429','http 402')):
-            return 'deferred_model_quota'
-    progress=bool(errors) and all(
-        ('coverage pending' in str(value).lower() or 'resume checkpointed' in str(value).lower())
-        for value in errors.values())
-    return 'deferred_progress' if progress else 'deferred_incomplete'
+    """Classify all required stages; a quota must not conceal another fault."""
+    if not isinstance(errors,dict) or not errors:return 'deferred_incomplete'
+    quota_seen=False
+    for stage,value in errors.items():
+        detail=str(value).lower()
+        if stage in ('vlm','asr') and any(t in detail for t in (
+                'hybrid provider cooldown:','quota exceeded','rate limit',
+                'insufficient credits','resource exhausted','neuron quota','http 429','http 402')):
+            quota_seen=True
+        elif 'coverage pending' in detail or 'resume checkpointed' in detail:
+            continue
+        else:
+            # An independently required OCR, speech, evidence or model stage
+            # failed for an unresolved reason. Do not suppress it as a quota.
+            return 'deferred_incomplete'
+    return 'deferred_model_quota' if quota_seen else 'deferred_progress'
 
 def retry_seconds(errors):
     from .model_quota_retry import model_quota_retry_seconds
