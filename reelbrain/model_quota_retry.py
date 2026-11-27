@@ -34,3 +34,22 @@ def model_quota_retry_seconds(stage_errors:dict|None, *, now:datetime|None=None)
         if any(s in line for s in ('503','502','service unavailable','upstream timed out')):
             return 3600
     return None
+
+def provider_retry_after_seconds(headers,*,now=None):
+    """Bound a provider-supplied Retry-After without trusting its raw text."""
+    from email.utils import parsedate_to_datetime
+    import math
+    try:
+        raw=next((v for k,v in headers.items() if str(k).lower()=='retry-after'),None)
+        if not isinstance(raw,str) or not 1<=len(raw)<=128:return None
+        raw=raw.strip()
+        if raw.isascii() and raw.isdigit():
+            seconds=int(raw)
+        else:
+            target=parsedate_to_datetime(raw)
+            current=now or datetime.now(timezone.utc)
+            if target.tzinfo is None or current.tzinfo is None:return None
+            seconds=math.ceil((target-current).total_seconds())
+        return min(86400,seconds) if seconds>0 else None
+    except (ValueError,TypeError,OverflowError,AttributeError,StopIteration):
+        return None
