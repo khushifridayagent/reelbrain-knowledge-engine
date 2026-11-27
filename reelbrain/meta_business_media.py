@@ -232,6 +232,27 @@ def download_source_assets(assets:tuple[MetaSourceAsset,...],output_directory:Pa
         if download_http is None and hasattr(http,'close'):http.close()
 
 
+def creator_for_lookup(creator_handle,evidence):
+    """A public export hint is only an input to official identity lookup.
+
+    Never promote a hint into verified metadata, and never choose between
+    conflicting hints. Graph still validates both username and shortcode.
+    """
+    if creator_handle:
+        if isinstance(creator_handle,str) and _CREATOR_RE.fullmatch(creator_handle.lstrip('@')):
+            return creator_handle.lstrip('@')
+        return None
+    if not isinstance(evidence,list):return None
+    hints=set()
+    for item in evidence:
+        if not isinstance(item,dict) or item.get('kind')!='owner_export_creator_hint' or item.get('verified') is not False:
+            continue
+        value=item.get('creator')
+        if isinstance(value,str) and _CREATOR_RE.fullmatch(value):
+            hints.add(value.lower())
+    return next(iter(hints)) if len(hints)==1 else None
+
+
 def acquire_with_meta_fallback(url:str,output_directory:Path|str,pg,*,cookies_file=None,
                                public_fetch=None,meta_fetch=None)->PublicBundle:
     """Attempt existing public extractor first, then approved official Graph.
@@ -247,14 +268,15 @@ def acquire_with_meta_fallback(url:str,output_directory:Path|str,pg,*,cookies_fi
         if not meta_fallback_enabled():
             raise
     with pg.cursor() as cur:
-        cur.execute("""SELECT creator_handle
+        cur.execute("""SELECT creator_handle,content_evidence
             FROM public.reelbrain_reel_knowledge WHERE source_url=%s LIMIT 1""",
             (canonicalize_instagram(url),))
-        creator=cur.fetchone()
-    if not creator or not creator[0]:
+        row=cur.fetchone()
+    creator=creator_for_lookup(row[0],row[1] if len(row)>1 else None) if row else None
+    if not creator:
         raise MetaMediaUnavailable('Public media unavailable: source creator identity missing')
     acquire=meta_fetch or acquire_meta_bundle
-    return acquire(url,str(creator[0]),
+    return acquire(url,creator,
         os.environ['REELBRAIN_META_GRAPH_TOKEN'],
         os.environ['REELBRAIN_META_IG_USER_ID'],
         output_directory)
