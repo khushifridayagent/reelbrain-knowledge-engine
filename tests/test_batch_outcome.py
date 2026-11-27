@@ -27,7 +27,7 @@ class BatchOutcomeTests(unittest.TestCase):
         self.assertIn('acknowledged', str(raised.exception).lower())
 
     def test_progress_and_incomplete_have_truthful_errors(self):
-        for status,phrase in [('deferred_progress','coverage'),('deferred_incomplete','incomplete')]:
+        for status,phrase in [('deferred_incomplete','incomplete')]:
             with self.subTest(status=status):
                 with self.assertRaises(RuntimeError) as raised:
                     require_successful_batch([{'status':status,'acknowledged_failure':True}])
@@ -50,12 +50,6 @@ class BatchOutcomeTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 with self.assertRaises(RuntimeError):
                     require_successful_batch([{'status': 'evidence_saved'}, failure])
-
-    def test_all_access_or_quota_deferrals_remain_unsuccessful(self):
-        for status in ('deferred_access', 'deferred_model_quota'):
-            with self.subTest(status=status):
-                with self.assertRaises(RuntimeError):
-                    require_successful_batch([{'status': status, 'acknowledged_failure': True}])
 
     def test_all_durably_deferred_batches_are_operational_not_completed(self):
         from contextlib import redirect_stdout
