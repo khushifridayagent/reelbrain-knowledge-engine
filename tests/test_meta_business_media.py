@@ -259,4 +259,41 @@ class MetaDiscoveryTests(unittest.TestCase):
             MetaBusinessDiscovery('fixture','17841400001234567',
                   http=FakeClient(payload)).find(SRC,'aimortal.ig')
 
+class CreatorLookupHintTests(unittest.TestCase):
+    def test_existing_creator_has_precedence_over_export_hint(self):
+        from reelbrain.meta_business_media import creator_for_lookup
+        hints=[{'kind':'owner_export_creator_hint','creator':'other.public','verified':False}]
+        self.assertEqual(creator_for_lookup('known.creator',hints),'known.creator')
+
+    def test_only_unambiguous_valid_public_creator_hint_is_used(self):
+        from reelbrain.meta_business_media import creator_for_lookup
+        hint={'kind':'owner_export_creator_hint','creator':'public.creator','verified':False}
+        self.assertEqual(creator_for_lookup(None,[hint,hint]),'public.creator')
+        self.assertIsNone(creator_for_lookup(None,[hint,{**hint,'creator':'different'}]))
+        self.assertIsNone(creator_for_lookup(None,[{**hint,'creator':'bad){token}'}]))
+        self.assertIsNone(creator_for_lookup(None,[{**hint,'kind':'untrusted_caption'}]))
+        self.assertIsNone(creator_for_lookup(None,[{**hint,'verified':True}]))
+        self.assertIsNone(creator_for_lookup(None,{'creator':'public.creator'}))
+
+    def test_hint_still_requires_exact_official_source_identity(self):
+        from reelbrain.meta_business_media import (
+            acquire_with_meta_fallback, MetaBusinessDiscovery, MetaMediaUnavailable)
+        from reelbrain.public_media import PublicMediaError
+        from unittest.mock import MagicMock
+        pg=MagicMock()
+        pg.cursor.return_value.__enter__.return_value.fetchone.return_value=(
+            None,[{'kind':'owner_export_creator_hint','creator':'aimortal.ig','verified':False}])
+        def public(*args,**kwargs):raise PublicMediaError('Public media unavailable')
+        def meta(url,creator,token,own_id,*args,**kwargs):
+            self.assertEqual(creator,'aimortal.ig')
+            return MetaBusinessDiscovery(token,own_id,http=FakeClient(
+                response_for(code='DIFFERENT'))).find(url,creator)
+        env={'REELBRAIN_META_GRAPH_TOKEN':'fixture',
+             'REELBRAIN_META_IG_USER_ID':'17841400001234567',
+             'REELBRAIN_META_BUSINESS_DISCOVERY_ENABLED':'1'}
+        with patch.dict('os.environ',env,clear=True):
+            with self.assertRaises(MetaMediaUnavailable):
+                acquire_with_meta_fallback(SRC,Path('/tmp'),pg,public_fetch=public,meta_fetch=meta)
+
+
 if __name__=='__main__':unittest.main()
