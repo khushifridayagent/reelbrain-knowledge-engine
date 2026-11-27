@@ -267,7 +267,11 @@ def run_one_batch(config:dict|None=None,batch_size:int=1,processor=None,*,target
                     lease_token=null,lease_until=null,available_at=now(),updated_at=now()
                 where """+RECOVERABLE_TERMINAL_SQL)
             if target_job_id is None:
-                cur.execute('select id,source_url,lease_token from public.reelbrain_claim_dm_jobs(%s,%s)',(min(10,max(1,batch_size)),900))
+                from .quota_gate import configured_vision_keys, all_vision_blocked_seconds, claim_media_jobs
+                blocked=all_vision_blocked_seconds(cur,configured_vision_keys())
+                if blocked:
+                    print('QUOTA_ADMISSION_WAIT seconds='+str(blocked),flush=True)
+                claim_media_jobs(cur,batch_size,blocked)
             else:
                 # One-off acceptance uses exactly the same lease and completion path.
                 cur.execute("""with selected as (select id from public.reelbrain_dm_jobs

@@ -118,6 +118,7 @@ jobs:
           from urllib.parse import urlsplit
           import psycopg
           from reelbrain.resumable_media import RECOVERABLE_TERMINAL_SQL
+          from reelbrain.quota_gate import configured_vision_keys, all_vision_blocked_seconds, QUOTA_WAIT_FILTER
           db = os.environ.get('REELBRAIN_DB_URL','')
           parsed = urlsplit(db)
           ref = 'xlkdzrhzizuftbnitodr'
@@ -128,9 +129,14 @@ jobs:
           try:
               with psycopg.connect(db,connect_timeout=6) as con:
                   with con.cursor() as cur:
-                      cur.execute("""SELECT COUNT(*) FROM public.reelbrain_dm_jobs
-                          WHERE (status='queued' AND available_at<=now()
-                          AND attempts<max_attempts) OR (status='leased' AND lease_until<now()) OR """ + RECOVERABLE_TERMINAL_SQL)
+                      blocked=all_vision_blocked_seconds(cur,configured_vision_keys())
+                      predicate=("""((status='queued' AND available_at<=now()
+                          AND attempts<max_attempts) OR (status='leased' AND lease_until<now()) OR """
+                          + RECOVERABLE_TERMINAL_SQL + ")")
+                      if blocked:
+                          predicate += " AND " + QUOTA_WAIT_FILTER
+                          print('Previously quota-deferred jobs waiting for provider capacity; earliest retry in',blocked,'seconds')
+                      cur.execute("SELECT COUNT(*) FROM public.reelbrain_dm_jobs WHERE "+predicate)
                       eligible_jobs=int(cur.fetchone()[0])
           except Exception as error:
               raise SystemExit('Reelbrain DB queue unavailable (' +
