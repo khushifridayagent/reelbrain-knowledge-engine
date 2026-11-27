@@ -248,7 +248,8 @@ class GeminiInlineVision:
                 retained.extend(rows);new+=1
             except Exception as e:
                 category='Gemini quota exceeded' if 'quota' in str(e).lower() else 'Gemini segment unavailable'
-                raise QwenPartialVisualError(category,retained) from None
+                raise QwenPartialVisualError(category,retained,
+                    retry_after_seconds=getattr(e,'retry_after_seconds',None)) from None
         return retained
 
     def analyze(self,path,*,checkpoint=None,asset_index=0):
@@ -274,7 +275,10 @@ class GeminiInlineVision:
         try:
             r=(self.client or httpx).post('https://generativelanguage.googleapis.com/v1beta/models/'+self.model+':generateContent',
                   headers={'x-goog-api-key':self.key},json=body,timeout=90,follow_redirects=False)
-            if r.status_code in (402,429):raise RuntimeError('Gemini quota exceeded')
+            if r.status_code in (402,429):
+                from .model_quota_retry import provider_retry_after_seconds
+                raise QwenPartialVisualError('Gemini quota exceeded',[],
+                    retry_after_seconds=provider_retry_after_seconds(getattr(r,'headers',{})))
             if r.status_code!=200:raise RuntimeError('Gemini API unavailable')
             return self.parse(r.json())
         except RuntimeError:raise
@@ -320,6 +324,9 @@ class HybridVision:
                     if key=='cloudflare_vision':
                         from .model_quota_retry import model_quota_retry_seconds
                         delay=model_quota_retry_seconds({'vlm':'daily Neuron quota exhausted'}) or 900
+                    hint=getattr(e,'retry_after_seconds',None)
+                    if type(hint) is int and hint>0:
+                        delay=max(delay,min(86400,hint))
                     checkpoint.defer_provider(key,delay);delays.append(delay)
         if delays:raise QwenPartialVisualError('hybrid provider cooldown:'+str(min(delays)),partial)
         raise QwenPartialVisualError('hybrid provider rate limit; retry later' if 'quota exceeded' in failures else 'all visual providers unavailable',partial)

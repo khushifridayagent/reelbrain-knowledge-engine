@@ -181,6 +181,31 @@ class NativeHybridTests(unittest.TestCase):
             self.assertEqual(HybridVision(limited,Backup()).analyze(Path('test.mp4'),checkpoint=cache,asset_index=asset)[0].text,'backup')
         self.assertEqual(limited.calls,1)
         self.assertGreaterEqual(cache.cooldowns['gemini_vision'],900)
+    def test_provider_retry_after_is_respected_and_other_provider_still_runs(self):
+        from reelbrain.qwen_vl import QwenPartialVisualError
+        class SharedCache(Cache):
+            def __init__(self):super().__init__();self.cooldowns={}
+            def provider_delay(self,key):return self.cooldowns.get(key,0)
+            def defer_provider(self,key,seconds):self.cooldowns[key]=seconds
+        class Limited:
+            cooldown_key='gemini_vision'
+            def analyze(self,p):
+                raise QwenPartialVisualError('quota exceeded',[],retry_after_seconds=7200)
+        class Backup:
+            cooldown_key='groq_vision'
+            def analyze(self,p):return [Observation('backup',kind='model_inference')]
+        cache=SharedCache()
+        self.assertEqual(HybridVision(Limited(),Backup()).analyze(Path('fixture.mp4'),checkpoint=cache)[0].text,'backup')
+        self.assertEqual(cache.cooldowns['gemini_vision'],7200)
+
+    def test_retry_after_header_parser_is_bounded_and_fail_closed(self):
+        from reelbrain.model_quota_retry import provider_retry_after_seconds
+        from datetime import datetime,timezone
+        now=datetime(2026,11,27,7,0,tzinfo=timezone.utc)
+        for value,expected in [('3600',3600),('9999999',86400),('0',None),('-1',None),
+                               ('Fri, 27 Nov 2026 09:00:00 GMT',7200),('invalid',None)]:
+            self.assertEqual(provider_retry_after_seconds({'Retry-After':value},now=now),expected)
+
     def test_cooldown_retry_uses_earliest_available_provider(self):
         from reelbrain.resumable_media import retry_seconds
         self.assertEqual(retry_seconds({'vlm':'QwenPartialVisualError: hybrid provider cooldown:1200'}),1200)

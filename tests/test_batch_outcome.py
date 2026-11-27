@@ -27,7 +27,7 @@ class BatchOutcomeTests(unittest.TestCase):
         self.assertIn('acknowledged', str(raised.exception).lower())
 
     def test_progress_and_incomplete_have_truthful_errors(self):
-        for status,phrase in [('deferred_progress','coverage'),('deferred_incomplete','incomplete')]:
+        for status,phrase in [('deferred_incomplete','incomplete')]:
             with self.subTest(status=status):
                 with self.assertRaises(RuntimeError) as raised:
                     require_successful_batch([{'status':status,'acknowledged_failure':True}])
@@ -51,11 +51,30 @@ class BatchOutcomeTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     require_successful_batch([{'status': 'evidence_saved'}, failure])
 
-    def test_all_access_or_quota_deferrals_remain_unsuccessful(self):
-        for status in ('deferred_access', 'deferred_model_quota'):
-            with self.subTest(status=status):
-                with self.assertRaises(RuntimeError):
-                    require_successful_batch([{'status': status, 'acknowledged_failure': True}])
+    def test_all_durably_deferred_batches_are_operational_not_completed(self):
+        from contextlib import redirect_stdout
+        import io
+        for statuses in (['deferred_model_quota']*4,
+                         ['deferred_access']*4,
+                         ['deferred_model_quota','deferred_access','deferred_progress'],
+                         ['deferred_progress']):
+            with self.subTest(statuses=statuses), redirect_stdout(io.StringIO()) as output:
+                summary=require_successful_batch([
+                    {'status':status,'acknowledged_failure':True} for status in statuses])
+                self.assertEqual(summary['state'],'deferred')
+                self.assertEqual(summary['completed'],0)
+                self.assertEqual(summary['deferred'],len(statuses))
+                self.assertIn('::warning::',output.getvalue())
+                self.assertNotIn('successfully completed',output.getvalue())
+
+    def test_safe_deferrals_never_hide_hard_or_unacknowledged_failure(self):
+        for status in ('deferred_access','deferred_model_quota','deferred_progress','deferred_incomplete'):
+            with self.subTest(status=status), self.assertRaises(RuntimeError):
+                require_successful_batch([{'status':'deferred_model_quota','acknowledged_failure':True},
+                                          {'status':status,'acknowledged_failure':False}])
+        with self.assertRaises(RuntimeError):
+            require_successful_batch([{'status':'deferred_access','acknowledged_failure':True},
+                                      {'status':'retry_or_dead_letter','acknowledged_failure':True}])
 
     def test_unknown_result_status_is_not_treated_as_success(self):
         with self.assertRaises(RuntimeError):

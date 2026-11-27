@@ -21,9 +21,10 @@ from .contracts import Observation
 
 class QwenPartialVisualError(RuntimeError):
     """Preserve successfully completed earlier visual batches for retries."""
-    def __init__(self,category:str,observations:list[Observation]):
+    def __init__(self,category:str,observations:list[Observation],*,retry_after_seconds=None):
         super().__init__(category)
         self.partial_observations=list(observations)
+        self.retry_after_seconds=retry_after_seconds
 
 
 class QwenVLResearcher:
@@ -227,7 +228,9 @@ class QwenVLResearcher:
                     self.url,json=body,headers=headers,timeout=120 if self.cloudflare_direct else 85)
                 code=getattr(response,'status_code',200)
                 if code in (402,429):
-                    raise QwenPartialVisualError('quota exceeded',retained)
+                    from .model_quota_retry import provider_retry_after_seconds
+                    raise QwenPartialVisualError('quota exceeded',retained,
+                        retry_after_seconds=provider_retry_after_seconds(getattr(response,'headers',{})))
                 if code in (502,503,504,522,524):
                     raise QwenPartialVisualError('service unavailable',retained)
                 if code>=400:

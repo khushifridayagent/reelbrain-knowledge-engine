@@ -1,0 +1,30 @@
+name: ReelBrain daily durable queue health
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '33 6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reelbrain-queue-health.yml'
+permissions:
+  contents: read
+concurrency:
+  group: reelbrain-queue-health
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]>=3.2,<4'
+      - name: Audit actual completion and durable queue health
+        env:
+          REELBRAIN_DB_URL: ${{ secrets.REELBRAIN_DB_URL }}
+        run: python -m reelbrain.queue_health
